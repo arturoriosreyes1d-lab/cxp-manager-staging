@@ -87,6 +87,7 @@ export default function CxcView({
   invoiceIngresos, setInvoiceIngresos,
   categorias, setCategorias,
   empresaId,
+  clientes = [],
 }) {
   /* ── Filters ───────────────────────────────────────────────── */
   const [filtroCliente, setFiltroCliente] = useState("");
@@ -115,6 +116,7 @@ export default function CxcView({
   const importRef = useRef();
   const [selectedIngresos, setSelectedIngresos] = useState(new Set());
   const [bulkFechaModal, setBulkFechaModal] = useState(false);
+  const [cobroMasivoModal, setCobroMasivoModal] = useState(false);
 
   /* ── Derived data ──────────────────────────────────────────── */
   const allInvoices = useMemo(() => [
@@ -423,22 +425,34 @@ export default function CxcView({
 
   /* ── Ingreso Form Modal ─────────────────────────────────────── */
   const IngresoModal = () => {
-    const [form, setForm] = useState({
-      id: modalIngreso.id || "",
-      cliente: modalIngreso.cliente || "",
-      concepto: modalIngreso.concepto || "",
-      categoria: modalIngreso.categoria || catList[0] || "Circuito",
-      monto: modalIngreso.monto || "",
-      moneda: modalIngreso.moneda || "MXN",
-      tipoCambio: modalIngreso.tipoCambio || 1,
-      fecha: modalIngreso.fecha || today(),
-      notas: modalIngreso.notas || "",
-      diasCredito: modalIngreso.diasCredito || 30,
-      fechaVencimiento: modalIngreso.fechaVencimiento || "",
-      fechaFicticia: modalIngreso.fechaFicticia || "",
+    const [form, setForm] = useState(()=>{
+      const f = {
+        id: modalIngreso.id || "",
+        cliente: modalIngreso.cliente || "",
+        concepto: modalIngreso.concepto || "",
+        categoria: modalIngreso.categoria || catList[0] || "Circuito",
+        monto: modalIngreso.monto || "",
+        moneda: modalIngreso.moneda || "MXN",
+        tipoCambio: modalIngreso.tipoCambio || 1,
+        fecha: modalIngreso.fecha || today(),
+        notas: modalIngreso.notas || "",
+        diasCredito: modalIngreso.diasCredito || 30,
+        fechaFicticia: modalIngreso.fechaFicticia || "",
+      };
+      // Auto-calc fechaVencimiento if not set
+      f.fechaVencimiento = modalIngreso.fechaVencimiento || addDays(f.fecha, f.diasCredito);
+      return f;
     });
     const set = (k,v) => setForm(f=>{
       const u = {...f,[k]:v};
+      // Auto-fill diasCredito from clientes catalog when cliente changes
+      if(k==="cliente") {
+        const cli = clientes.find(c=>c.nombre===v);
+        if(cli) {
+          u.diasCredito = cli.diasCredito;
+          u.fechaVencimiento = addDays(f.fecha, cli.diasCredito);
+        }
+      }
       // Auto-calc fechaVencimiento when fecha or diasCredito changes
       if(k==="fecha"||k==="diasCredito") {
         u.fechaVencimiento = addDays(k==="fecha"?v:f.fecha, k==="diasCredito"?v:f.diasCredito);
@@ -452,7 +466,12 @@ export default function CxcView({
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
           <Field label="Cliente *">
             <input list="cxc-clientes" value={form.cliente} onChange={e=>set("cliente",e.target.value)} placeholder="Nombre del cliente…" style={inputStyle}/>
-            <datalist id="cxc-clientes">{clientesList.map(c=><option key={c} value={c}/>)}</datalist>
+            <datalist id="cxc-clientes">
+              {clientes.length > 0
+                ? clientes.map(c=><option key={c.id} value={c.nombre}/>)
+                : clientesList.map(c=><option key={c} value={c}/>)
+              }
+            </datalist>
           </Field>
           <Field label="Categoría">
             <select value={form.categoria} onChange={e=>set("categoria",e.target.value)} style={selectStyle}>
@@ -1229,7 +1248,7 @@ export default function CxcView({
                   onMouseLeave={e=>{if(hasCobros)e.currentTarget.style.opacity="1";}}>
                   <div style={{width:28,height:28,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",background:isToday?C.navy:"transparent",color:isToday?"#fff":hasCobros?textCol:C.text,fontWeight:isToday||hasCobros?800:400,fontSize:14,marginBottom:6}}>{day}</div>
                   {Object.entries(byMon).map(([mon,val])=>(
-                    <div key={mon} style={{background:{MXN:C.mxn,USD:C.usd,EUR:C.eur}[mon]||"#7B1FA2",color:"#fff",borderRadius:7,padding:"4px 7px",fontSize:13,fontWeight:800,marginBottom:4,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",letterSpacing:"-0.3px"}}>
+                    <div key={mon} style={{background:{MXN:"#1976D2",USD:"#2E7D32",EUR:"#6A1B9A"}[mon]||"#546E7A",color:"#fff",borderRadius:7,padding:"4px 7px",fontSize:13,fontWeight:800,marginBottom:4,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",letterSpacing:"-0.3px"}}>
                       {mon==="EUR"?"€":"$"}{fmt(val)}
                       <span style={{fontSize:10,fontWeight:600,opacity:.85,marginLeft:3}}>{mon}</span>
                     </div>
@@ -1517,8 +1536,11 @@ export default function CxcView({
       {selectedIngresos.size > 0 && (
         <div style={{display:"flex",alignItems:"center",gap:12,padding:"10px 16px",background:"#E8F0FE",border:`1px solid ${C.blue}`,borderRadius:10,marginBottom:12}}>
           <span style={{fontWeight:700,color:C.blue,fontSize:13}}>{selectedIngresos.size} ingreso{selectedIngresos.size!==1?"s":""} seleccionado{selectedIngresos.size!==1?"s":""}</span>
+          <button onClick={()=>setCobroMasivoModal(true)} style={{...btnStyle,background:C.ok,padding:"6px 14px",fontSize:12}}>
+            💰 Cobro Masivo
+          </button>
           <button onClick={()=>setBulkFechaModal(true)} style={{...btnStyle,background:"#7B1FA2",padding:"6px 14px",fontSize:12}}>
-            📅 Asignar Fecha Ficticia Masiva
+            📅 Fecha Ficticia Masiva
           </button>
           <button onClick={()=>setSelectedIngresos(new Set())} style={{...btnStyle,background:"#F1F5F9",color:C.text,padding:"6px 12px",fontSize:12}}>
             ✕ Deseleccionar
@@ -1607,10 +1629,23 @@ export default function CxcView({
                 {/* Ingresos expandidos */}
                 {expanded && (
                   <div style={{borderTop:`1px solid ${C.border}`,overflowX:"auto"}}>
-                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:860}}>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:1000}}>
                       <thead>
                         <tr style={{background:"#EEF2FF"}}>
-                          {["Concepto","Categoría","Fecha","Monto","Cobrado","Por Cobrar","Consumido","Por Pagar","Disponible","D. Neto","Acciones"].map(h=>(
+                          <th style={{padding:"8px 6px",width:36,textAlign:"center"}}>
+                            <input type="checkbox" style={{cursor:"pointer",accentColor:C.blue}}
+                              checked={ings.every(i=>selectedIngresos.has(i.id))}
+                              onChange={()=>{
+                                const allSelected = ings.every(i=>selectedIngresos.has(i.id));
+                                setSelectedIngresos(prev=>{
+                                  const n=new Set(prev);
+                                  if(allSelected) ings.forEach(i=>n.delete(i.id));
+                                  else ings.forEach(i=>n.add(i.id));
+                                  return n;
+                                });
+                              }}/>
+                          </th>
+                          {["Concepto","Categoría","Fecha","Vencimiento","Fecha Ficticia","Monto","Cobrado","Por Cobrar","Consumido","Por Pagar","Disponible","D. Neto","Acciones"].map(h=>(
                             <th key={h} style={{padding:"8px 10px",textAlign:["Monto","Cobrado","Por Cobrar","Consumido","Por Pagar","Disponible","D. Neto"].includes(h)?"right":"left",color:C.blue,fontWeight:700,fontSize:10,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
                           ))}
                         </tr>
@@ -1621,17 +1656,33 @@ export default function CxcView({
                           const sym = monedaSym(ing.moneda);
                           const catStyle = getCatStyle(ing.categoria);
                           const disponColor = (m.disponible||0)>0?C.teal:(m.disponible||0)===0?C.muted:C.danger;
+                          const isSelected = selectedIngresos.has(ing.id);
+                          const hoy = today();
+                          const venceProx = ing.fechaVencimiento && ing.fechaVencimiento < hoy;
                           return (
                             <tr key={ing.id}
-                              style={{borderTop:`1px solid ${C.border}`,background:idx%2===0?"#FAFBFF":"#fff",cursor:"pointer"}}
+                              style={{borderTop:`1px solid ${C.border}`,background:isSelected?"#E8F0FE":idx%2===0?"#FAFBFF":"#fff",cursor:"pointer"}}
                               onClick={()=>setDetailIngreso(ing.id)}
-                              onMouseEnter={e=>{e.currentTarget.style.background="#E8F0FE";}}
-                              onMouseLeave={e=>{e.currentTarget.style.background=idx%2===0?"#FAFBFF":"#fff";}}>
+                              onMouseEnter={e=>{if(!isSelected)e.currentTarget.style.background="#E8F0FE";}}
+                              onMouseLeave={e=>{if(!isSelected)e.currentTarget.style.background=idx%2===0?"#FAFBFF":"#fff";}}>
+                              <td style={{padding:"8px 6px",textAlign:"center"}} onClick={e=>e.stopPropagation()}>
+                                <input type="checkbox" checked={isSelected} onChange={()=>{
+                                  setSelectedIngresos(prev=>{const n=new Set(prev);if(n.has(ing.id))n.delete(ing.id);else n.add(ing.id);return n;});
+                                }} style={{cursor:"pointer",accentColor:C.blue}}/>
+                              </td>
                               <td style={{padding:"9px 10px",color:ing.concepto?C.text:C.muted,fontStyle:ing.concepto?"normal":"italic",minWidth:140}}>{ing.concepto||"—"}</td>
                               <td style={{padding:"9px 10px"}}>
                                 <span style={{background:catStyle.bg,color:catStyle.text,border:`1px solid ${catStyle.border}`,padding:"2px 7px",borderRadius:20,fontSize:10,fontWeight:700,whiteSpace:"nowrap"}}>{ing.categoria||"—"}</span>
                               </td>
                               <td style={{padding:"9px 10px",whiteSpace:"nowrap",fontSize:11,color:C.muted}}>{ing.fecha||"—"}</td>
+                              <td style={{padding:"9px 10px",whiteSpace:"nowrap",fontSize:11,color:venceProx?C.danger:C.text,fontWeight:ing.fechaVencimiento?600:400}}>{ing.fechaVencimiento||"—"}</td>
+                              <td style={{padding:"9px 8px"}} onClick={e=>e.stopPropagation()}>
+                                <input type="date" value={ing.fechaFicticia||""} onChange={e=>{
+                                  const val=e.target.value;
+                                  setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,fechaFicticia:val}:i));
+                                  updateIngresoField(ing.id,{fechaFicticia:val});
+                                }} style={{padding:"2px 5px",fontSize:10,border:`1px solid ${ing.fechaFicticia?"#7B1FA2":C.border}`,borderRadius:6,color:ing.fechaFicticia?"#7B1FA2":C.text,width:120,fontFamily:"inherit"}}/>
+                              </td>
                               <td style={{padding:"9px 10px",fontWeight:700,textAlign:"right"}}>{sym}{fmt(ing.monto)}</td>
                               <td style={{padding:"9px 10px",color:C.ok,textAlign:"right"}}>{sym}{fmt(m.totalCobrado||0)}</td>
                               <td style={{padding:"9px 10px",color:(m.porCobrar||0)>0?C.warn:C.ok,textAlign:"right",fontWeight:600}}>{sym}{fmt(m.porCobrar||0)}</td>
@@ -1859,48 +1910,103 @@ export default function CxcView({
         </ModalShell>
       )}
       {/* Bulk Fecha Ficticia Modal */}
-      {bulkFechaModal && (
-        <ModalShell title="📅 Asignar Fecha Ficticia Masiva" onClose={()=>setBulkFechaModal(false)}>
-          {(() => {
-            const [bulkFecha, setBulkFecha] = useState("");
-            const [saving, setSaving] = useState(false);
-            const selectedList = filtered.filter(i=>selectedIngresos.has(i.id));
-            const handleSave = async () => {
-              setSaving(true);
-              for (const ing of selectedList) {
-                await updateIngresoField(ing.id, { fechaFicticia: bulkFecha });
-                setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,fechaFicticia:bulkFecha}:i));
-              }
-              setSelectedIngresos(new Set());
-              setBulkFechaModal(false);
-              setSaving(false);
-            };
-            return (
-              <div>
-                <div style={{background:"#F8FAFC",border:`1px solid ${C.border}`,borderRadius:10,padding:14,marginBottom:16}}>
-                  <div style={{fontSize:13,color:C.muted,marginBottom:4}}>Se asignará a <b style={{color:C.navy}}>{selectedList.length} ingresos</b>:</div>
-                  <div style={{display:"flex",flexWrap:"wrap",gap:6,maxHeight:120,overflowY:"auto"}}>
-                    {selectedList.map(i=>(
-                      <span key={i.id} style={{background:"#E8F0FE",color:C.blue,padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:600}}>{i.cliente} — {i.concepto||i.categoria}</span>
-                    ))}
-                  </div>
-                </div>
-                <div style={{marginBottom:20}}>
-                  <label style={{display:"block",fontSize:12,fontWeight:700,color:C.muted,textTransform:"uppercase",letterSpacing:.5,marginBottom:6}}>Fecha Ficticia de Cobro</label>
-                  <input type="date" value={bulkFecha} onChange={e=>setBulkFecha(e.target.value)} style={{...inputStyle,fontSize:15}}/>
-                  <div style={{fontSize:11,color:C.muted,marginTop:6}}>Esta fecha se usará en la proyección. Si está vacía, se limpiará la fecha ficticia y se usará el vencimiento.</div>
-                </div>
-                <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
-                  <button onClick={()=>setBulkFechaModal(false)} style={{...btnStyle,background:"#F1F5F9",color:C.text}}>Cancelar</button>
-                  <button onClick={handleSave} disabled={saving} style={{...btnStyle,background:"#7B1FA2",opacity:saving?.6:1}}>
-                    {saving?"Guardando…":`✅ Aplicar a ${selectedList.length} ingresos`}
-                  </button>
-                </div>
-              </div>
-            );
-          })()}
-        </ModalShell>
-      )}
+      {bulkFechaModal && <BulkFechaModal
+        selectedList={filtered.filter(i=>selectedIngresos.has(i.id))}
+        onClose={()=>setBulkFechaModal(false)}
+        onSave={async(fecha)=>{
+          const list = filtered.filter(i=>selectedIngresos.has(i.id));
+          for(const ing of list){
+            await updateIngresoField(ing.id,{fechaFicticia:fecha});
+            setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,fechaFicticia:fecha}:i));
+          }
+          setSelectedIngresos(new Set());
+          setBulkFechaModal(false);
+        }}
+      />}
+
+      {/* Cobro Masivo Modal */}
+      {cobroMasivoModal && <CobroMasivoModal
+        selectedList={filtered.filter(i=>selectedIngresos.has(i.id))}
+        onClose={()=>setCobroMasivoModal(false)}
+        onSave={async(fecha,notas)=>{
+          const list = filtered.filter(i=>selectedIngresos.has(i.id));
+          for(const ing of list){
+            const porCobrar = (metrics[ing.id]?.porCobrar)||0;
+            if(porCobrar<=0) continue;
+            const saved = await insertCobro({ingresoId:ing.id,monto:porCobrar,fechaCobro:fecha,notas,tipo:'realizado'});
+            setCobros(prev=>[saved,...prev]);
+          }
+          setSelectedIngresos(new Set());
+          setCobroMasivoModal(false);
+        }}
+      />}
     </div>
+  );
+}
+
+/* ── Bulk Fecha Ficticia Modal (extracted component) ─────────── */
+function BulkFechaModal({selectedList, onClose, onSave}) {
+  const [fecha, setFecha] = useState("");
+  const [saving, setSaving] = useState(false);
+  const handleSave = async() => { setSaving(true); await onSave(fecha); setSaving(false); };
+  return (
+    <ModalShell title="📅 Asignar Fecha Ficticia Masiva" onClose={onClose}>
+      <div style={{background:"#F8FAFC",border:"1px solid #E2E8F0",borderRadius:10,padding:14,marginBottom:16}}>
+        <div style={{fontSize:13,color:"#64748B",marginBottom:4}}>Se asignará a <b style={{color:"#0F2D4A"}}>{selectedList.length} ingresos</b>:</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:6,maxHeight:120,overflowY:"auto"}}>
+          {selectedList.map(i=>(
+            <span key={i.id} style={{background:"#E8F0FE",color:"#1565C0",padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:600}}>{i.cliente} — {i.concepto||i.categoria}</span>
+          ))}
+        </div>
+      </div>
+      <div style={{marginBottom:20}}>
+        <label style={{display:"block",fontSize:12,fontWeight:700,color:"#64748B",textTransform:"uppercase",letterSpacing:.5,marginBottom:6}}>Fecha Ficticia de Cobro</label>
+        <input type="date" value={fecha} onChange={e=>setFecha(e.target.value)} style={{padding:"10px 14px",borderRadius:10,border:"2px solid #E2E8F0",fontSize:15,width:"100%",boxSizing:"border-box",fontFamily:"inherit"}}/>
+        <div style={{fontSize:11,color:"#64748B",marginTop:6}}>Si dejas vacío, se limpiará la fecha ficticia y se usará el vencimiento.</div>
+      </div>
+      <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+        <button onClick={onClose} style={{padding:"10px 20px",borderRadius:10,border:"none",background:"#F1F5F9",color:"#1A2332",fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Cancelar</button>
+        <button onClick={handleSave} disabled={saving} style={{padding:"10px 20px",borderRadius:10,border:"none",background:"#7B1FA2",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?.6:1}}>
+          {saving?"Guardando…":`✅ Aplicar a ${selectedList.length} ingresos`}
+        </button>
+      </div>
+    </ModalShell>
+  );
+}
+
+/* ── Cobro Masivo Modal ───────────────────────────────────────── */
+function CobroMasivoModal({selectedList, onClose, onSave}) {
+  const [fecha, setFecha] = useState(new Date().toISOString().split("T")[0]);
+  const [notas, setNotas] = useState("");
+  const [saving, setSaving] = useState(false);
+  const total = selectedList.reduce((s,i)=>s+i.monto,0);
+  const handleSave = async() => { if(!fecha) return; setSaving(true); await onSave(fecha,notas); setSaving(false); };
+  return (
+    <ModalShell title="💰 Cobro Masivo" onClose={onClose}>
+      <div style={{background:"#E8F5E9",border:"1px solid #A5D6A7",borderRadius:10,padding:14,marginBottom:16}}>
+        <div style={{fontSize:13,color:"#64748B",marginBottom:4}}>Se registrará cobro completo (Por Cobrar) de <b style={{color:"#0F2D4A"}}>{selectedList.length} ingresos</b></div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:6,maxHeight:120,overflowY:"auto",marginTop:8}}>
+          {selectedList.map(i=>(
+            <span key={i.id} style={{background:"#fff",color:"#1B5E20",padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:600,border:"1px solid #A5D6A7"}}>{i.cliente} — {i.concepto||i.categoria}</span>
+          ))}
+        </div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
+        <div>
+          <label style={{display:"block",fontSize:12,fontWeight:700,color:"#64748B",textTransform:"uppercase",letterSpacing:.5,marginBottom:6}}>Fecha de Cobro *</label>
+          <input type="date" value={fecha} onChange={e=>setFecha(e.target.value)} style={{padding:"10px 14px",borderRadius:10,border:"2px solid #E2E8F0",fontSize:14,width:"100%",boxSizing:"border-box",fontFamily:"inherit"}}/>
+        </div>
+        <div>
+          <label style={{display:"block",fontSize:12,fontWeight:700,color:"#64748B",textTransform:"uppercase",letterSpacing:.5,marginBottom:6}}>Notas</label>
+          <input value={notas} onChange={e=>setNotas(e.target.value)} placeholder="Ej. Transferencia bancaria..." style={{padding:"10px 14px",borderRadius:10,border:"2px solid #E2E8F0",fontSize:14,width:"100%",boxSizing:"border-box",fontFamily:"inherit"}}/>
+        </div>
+      </div>
+      <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+        <button onClick={onClose} style={{padding:"10px 20px",borderRadius:10,border:"none",background:"#F1F5F9",color:"#1A2332",fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Cancelar</button>
+        <button onClick={handleSave} disabled={saving||!fecha} style={{padding:"10px 20px",borderRadius:10,border:"none",background:"#43A047",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:(saving||!fecha)?.6:1}}>
+          {saving?"Registrando…":`✅ Registrar cobro de ${selectedList.length} ingresos`}
+        </button>
+      </div>
+    </ModalShell>
   );
 }

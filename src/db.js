@@ -439,3 +439,60 @@ export async function deleteCategoriaIngreso(id) {
   const { error } = await supabase.from('categorias_ingreso').delete().eq('id', id);
   if (error) console.error('deleteCategoriaIngreso:', error);
 }
+
+/* ── Clientes ────────────────────────────────────────────────── */
+const clienteToApp = (r) => ({
+  id: r.id,
+  nombre: r.nombre || '',
+  rfc: r.rfc || '',
+  moneda: r.moneda || 'MXN',
+  diasCredito: +r.dias_credito || 30,
+  contacto: r.contacto || '',
+  telefono: r.telefono || '',
+  email: r.email || '',
+  notas: r.notas || '',
+  activo: r.activo !== false,
+  empresaId: r.empresa_id || null,
+});
+
+const clienteToDB = (c) => ({
+  id: c.id,
+  nombre: c.nombre,
+  rfc: c.rfc || '',
+  moneda: c.moneda || 'MXN',
+  dias_credito: c.diasCredito || 30,
+  contacto: c.contacto || '',
+  telefono: c.telefono || '',
+  email: c.email || '',
+  notas: c.notas || '',
+  activo: c.activo !== false,
+  empresa_id: c.empresaId || null,
+});
+
+export async function fetchClientes(empresaId) {
+  let q = supabase.from('clientes').select('*').order('nombre');
+  if (empresaId) q = q.eq('empresa_id', empresaId);
+  const { data, error } = await q;
+  if (error) { console.error('fetchClientes:', error); return []; }
+  return (data || []).map(clienteToApp);
+}
+
+export async function upsertCliente(cliente) {
+  const row = clienteToDB(cliente);
+  if (row.id && /^[0-9a-f]{8}-[0-9a-f]{4}-/.test(row.id)) {
+    const { id, ...rest } = row;
+    const { data, error } = await supabase.from('clientes').update(rest).eq('id', id).select().single();
+    if (error) { console.error('upsertCliente:', error); return cliente; }
+    return clienteToApp(data);
+  } else {
+    const { id, ...rest } = row;
+    const { data, error } = await supabase.from('clientes').insert(rest).select().single();
+    if (error) { console.error('insertCliente:', error); return cliente; }
+    return clienteToApp(data);
+  }
+}
+
+export async function deleteCliente(id) {
+  const { error } = await supabase.from('clientes').delete().eq('id', id);
+  if (error) console.error('deleteCliente:', error);
+}

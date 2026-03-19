@@ -11,6 +11,7 @@ import {
   fetchPayments, insertPayment, deletePayment, updatePayment,
   fetchIngresos, fetchCobros, fetchInvoiceIngresos, fetchCategoriasIngreso,
   upsertInvoiceIngreso, deleteInvoiceIngreso,
+  fetchClientes, upsertCliente, deleteCliente,
 } from "./db.js";
 import CxcView from "./CxcView.jsx";
 import { EMPRESAS } from "./empresas.js";
@@ -157,15 +158,17 @@ export default function CxpApp({ user, onLogout }) {
   const [cobros, setCobros] = useState([]);
   const [invoiceIngresos, setInvoiceIngresos] = useState([]);
   const [categoriasIngreso, setCategoriasIngreso] = useState([]);
+  const [clientes, setClientes] = useState([]);
   const [vincularModal, setVincularModal] = useState(null); // {invoiceId, proveedor, folio, total, moneda}
 
   /* ── Load data from Supabase ────────────────────────────────────── */
   useEffect(() => {
     (async () => {
       setLoading(true);
-      const [inv, sup, cls, pays, ings, cbs, invIngs, cats] = await Promise.all([
+      const [inv, sup, cls, pays, ings, cbs, invIngs, cats, clts] = await Promise.all([
         fetchInvoices(empresaId), fetchSuppliers(empresaId), fetchClasificaciones(empresaId), fetchPayments(empresaId),
         fetchIngresos(empresaId), fetchCobros(empresaId), fetchInvoiceIngresos(empresaId), fetchCategoriasIngreso(empresaId),
+        fetchClientes(empresaId),
       ]);
       setInvoices(inv);
       setSuppliers(sup.length > 0 ? sup : []);
@@ -175,6 +178,7 @@ export default function CxpApp({ user, onLogout }) {
       setCobros(cbs);
       setInvoiceIngresos(invIngs);
       setCategoriasIngreso(cats);
+      setClientes(clts);
       setLoading(false);
     })();
   }, [empresaId]);
@@ -1740,6 +1744,7 @@ export default function CxpApp({ user, onLogout }) {
         <NavItem id="proyeccion" icon="📅" label="Proyección"/>
         <NavItem id="importar" icon="📥" label="Importar"/>
         <NavItem id="cxc" icon="💵" label="CxC — Ingresos"/>
+        <NavItem id="clientes" icon="👥" label="Clientes CxC"/>
         <NavItem id="config" icon="⚙️" label="Configuración"/>
         {kpis.vencidas>0 && (
           <div style={{marginTop:12,background:"#FFF5F5",border:"1px solid #FFCDD2",borderRadius:10,padding:"10px 12px",fontSize:12}}>
@@ -1796,6 +1801,15 @@ export default function CxpApp({ user, onLogout }) {
             setInvoiceIngresos={setInvoiceIngresos}
             categorias={categoriasIngreso}
             setCategorias={setCategoriasIngreso}
+            empresaId={empresaId}
+            clientes={clientes}
+          />
+        )}
+
+        {view==="clientes" && (
+          <ClientesView
+            clientes={clientes}
+            setClientes={setClientes}
             empresaId={empresaId}
           />
         )}
@@ -2509,6 +2523,170 @@ export default function CxpApp({ user, onLogout }) {
         };
         return <VincularForm/>;
       })()}
+    </div>
+  );
+}
+
+/* ── Clientes CxC View ───────────────────────────────────────── */
+function ClientesView({ clientes, setClientes, empresaId }) {
+  const C = {navy:"#0F2D4A",blue:"#1565C0",sky:"#2196F3",teal:"#00897B",cream:"#FAFBFC",surface:"#FFFFFF",border:"#E2E8F0",muted:"#64748B",text:"#1A2332",danger:"#E53935",warn:"#F59E0B",ok:"#43A047"};
+  const inputStyle = {padding:"10px 14px",borderRadius:10,border:`2px solid ${C.border}`,fontSize:14,outline:"none",background:C.cream,width:"100%",fontFamily:"inherit",color:C.text,boxSizing:"border-box"};
+  const btnStyle = {padding:"10px 20px",borderRadius:10,border:"none",background:C.blue,color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"inherit",fontSize:13};
+  const iconBtn = {background:"none",border:"none",cursor:"pointer",padding:"4px 6px",borderRadius:6,fontSize:15,transition:"background .15s"};
+
+  const [modalCliente, setModalCliente] = useState(null);
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [search, setSearch] = useState("");
+
+  const filtered = clientes.filter(c =>
+    !search || c.nombre.toLowerCase().includes(search.toLowerCase()) || (c.rfc||"").toLowerCase().includes(search.toLowerCase())
+  );
+
+  const saveCliente = async (data) => {
+    const saved = await upsertCliente({ ...data, empresaId });
+    setClientes(prev => {
+      const exists = prev.find(c => c.id === saved.id);
+      if (exists) return prev.map(c => c.id === saved.id ? saved : c);
+      return [saved, ...prev];
+    });
+    setModalCliente(null);
+  };
+
+  const handleDelete = async () => {
+    if (!deleteConfirm) return;
+    await deleteCliente(deleteConfirm.id);
+    setClientes(prev => prev.filter(c => c.id !== deleteConfirm.id));
+    setDeleteConfirm(null);
+  };
+
+  const ClienteModal = () => {
+    const [form, setForm] = useState({
+      id: modalCliente.id || "",
+      nombre: modalCliente.nombre || "",
+      rfc: modalCliente.rfc || "",
+      moneda: modalCliente.moneda || "MXN",
+      diasCredito: modalCliente.diasCredito || 30,
+      contacto: modalCliente.contacto || "",
+      telefono: modalCliente.telefono || "",
+      email: modalCliente.email || "",
+      notas: modalCliente.notas || "",
+      activo: modalCliente.activo !== false,
+    });
+    const set = (k,v) => setForm(f=>({...f,[k]:v}));
+    const Field = ({label,children}) => (
+      <div><label style={{display:"block",fontSize:12,fontWeight:700,color:C.muted,textTransform:"uppercase",letterSpacing:.5,marginBottom:6}}>{label}</label>{children}</div>
+    );
+    return (
+      <div style={{position:"fixed",inset:0,background:"rgba(15,45,74,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:2000,padding:20}}>
+        <div style={{background:C.surface,borderRadius:20,padding:28,width:"100%",maxWidth:560,maxHeight:"90vh",overflowY:"auto",boxShadow:"0 24px 64px rgba(0,0,0,.3)"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+            <h2 style={{fontSize:18,fontWeight:800,color:C.navy,margin:0}}>{form.id?"Editar Cliente":"Nuevo Cliente"}</h2>
+            <button onClick={()=>setModalCliente(null)} style={{background:"#F1F5F9",border:"none",borderRadius:8,width:34,height:34,cursor:"pointer",fontSize:18}}>×</button>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
+            <div style={{gridColumn:"1/-1"}}>
+              <Field label="Nombre *"><input value={form.nombre} onChange={e=>set("nombre",e.target.value)} placeholder="Nombre del cliente…" style={inputStyle}/></Field>
+            </div>
+            <Field label="RFC"><input value={form.rfc} onChange={e=>set("rfc",e.target.value)} placeholder="RFC…" style={inputStyle}/></Field>
+            <Field label="Moneda">
+              <select value={form.moneda} onChange={e=>set("moneda",e.target.value)} style={inputStyle}>
+                <option value="MXN">🇲🇽 MXN</option>
+                <option value="USD">🇺🇸 USD</option>
+                <option value="EUR">🇪🇺 EUR</option>
+              </select>
+            </Field>
+            <Field label="Días de Crédito">
+              <input type="number" value={form.diasCredito} onChange={e=>set("diasCredito",e.target.value)} placeholder="30" style={inputStyle} min="0"/>
+            </Field>
+            <Field label="Contacto"><input value={form.contacto} onChange={e=>set("contacto",e.target.value)} placeholder="Nombre del contacto…" style={inputStyle}/></Field>
+            <Field label="Teléfono"><input value={form.telefono} onChange={e=>set("telefono",e.target.value)} placeholder="+52 999…" style={inputStyle}/></Field>
+            <Field label="Email"><input type="email" value={form.email} onChange={e=>set("email",e.target.value)} placeholder="correo@ejemplo.com" style={inputStyle}/></Field>
+          </div>
+          <div style={{marginBottom:16}}>
+            <Field label="Notas"><textarea value={form.notas} onChange={e=>set("notas",e.target.value)} rows={2} style={{...inputStyle,resize:"vertical"}} placeholder="Observaciones…"/></Field>
+          </div>
+          <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+            <button onClick={()=>setModalCliente(null)} style={{...btnStyle,background:"#F1F5F9",color:C.text}}>Cancelar</button>
+            <button onClick={()=>{if(!form.nombre) return; saveCliente(form);}} disabled={!form.nombre} style={btnStyle}>Guardar</button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+        <div>
+          <h1 style={{fontSize:24,fontWeight:800,color:C.navy,margin:0}}>👥 Clientes CxC</h1>
+          <p style={{color:C.muted,fontSize:14,margin:"4px 0 0"}}>Catálogo de clientes con días de crédito y datos de contacto</p>
+        </div>
+        <button onClick={()=>setModalCliente({id:"",nombre:"",rfc:"",moneda:"MXN",diasCredito:30,contacto:"",telefono:"",email:"",notas:"",activo:true})} style={btnStyle}>
+          + Nuevo Cliente
+        </button>
+      </div>
+
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:16,marginBottom:20}}>
+        <input placeholder="🔍 Buscar por nombre o RFC…" value={search} onChange={e=>setSearch(e.target.value)}
+          style={{...inputStyle,maxWidth:320}}/>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div style={{textAlign:"center",padding:60,color:C.muted,background:C.surface,borderRadius:14,border:`1px solid ${C.border}`}}>
+          <div style={{fontSize:48,marginBottom:12}}>👥</div>
+          <div style={{fontSize:16,fontWeight:600}}>{clientes.length===0?"Sin clientes registrados":"Sin resultados"}</div>
+          {clientes.length===0 && <button onClick={()=>setModalCliente({id:"",nombre:"",rfc:"",moneda:"MXN",diasCredito:30,contacto:"",telefono:"",email:"",notas:"",activo:true})} style={{...btnStyle,marginTop:16}}>+ Crear primer cliente</button>}
+        </div>
+      ) : (
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,overflow:"hidden"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+            <thead>
+              <tr style={{background:C.navy}}>
+                {["Nombre","RFC","Moneda","Días Créd.","Contacto","Teléfono","Email","Acciones"].map(h=>(
+                  <th key={h} style={{padding:"10px 12px",textAlign:"left",color:"#fff",fontWeight:600,fontSize:11,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((c,idx)=>(
+                <tr key={c.id} style={{borderTop:`1px solid ${C.border}`,background:idx%2===0?C.surface:"#FAFBFC"}}
+                  onMouseEnter={e=>{e.currentTarget.style.background="#F0F7FF";}}
+                  onMouseLeave={e=>{e.currentTarget.style.background=idx%2===0?C.surface:"#FAFBFC";}}>
+                  <td style={{padding:"12px 12px",fontWeight:700,color:C.navy}}>{c.nombre}</td>
+                  <td style={{padding:"12px 12px",color:C.muted,fontSize:12}}>{c.rfc||"—"}</td>
+                  <td style={{padding:"12px 12px"}}>
+                    <span style={{background:{MXN:"#E3F2FD",USD:"#E8F5E9",EUR:"#F3E5F5"}[c.moneda]||"#F8FAFC",color:{MXN:"#1565C0",USD:"#2E7D32",EUR:"#6A1B9A"}[c.moneda]||C.navy,padding:"2px 8px",borderRadius:20,fontSize:11,fontWeight:700}}>{c.moneda}</span>
+                  </td>
+                  <td style={{padding:"12px 12px",fontWeight:700,color:C.blue,textAlign:"center"}}>{c.diasCredito}</td>
+                  <td style={{padding:"12px 12px",color:C.text}}>{c.contacto||"—"}</td>
+                  <td style={{padding:"12px 12px",color:C.muted,fontSize:12}}>{c.telefono||"—"}</td>
+                  <td style={{padding:"12px 12px",color:C.sky,fontSize:12}}>{c.email||"—"}</td>
+                  <td style={{padding:"12px 8px",whiteSpace:"nowrap"}}>
+                    <button onClick={()=>setModalCliente({...c})} style={{...iconBtn,color:C.blue}} title="Editar">✏️</button>
+                    <button onClick={()=>setDeleteConfirm({id:c.id,label:c.nombre})} style={{...iconBtn,color:C.danger}} title="Eliminar">🗑️</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {modalCliente && <ClienteModal/>}
+
+      {deleteConfirm && (
+        <div style={{position:"fixed",inset:0,background:"rgba(15,45,74,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:2500,padding:20}}>
+          <div style={{background:C.surface,borderRadius:20,padding:28,maxWidth:400,width:"100%",textAlign:"center",boxShadow:"0 24px 64px rgba(0,0,0,.3)"}}>
+            <div style={{fontSize:48,marginBottom:16}}>🗑️</div>
+            <p style={{fontSize:15,color:C.text,marginBottom:8}}>¿Eliminar este cliente?</p>
+            <p style={{fontSize:14,fontWeight:700,color:C.navy,marginBottom:24}}>{deleteConfirm.label}</p>
+            <div style={{display:"flex",gap:12,justifyContent:"center"}}>
+              <button onClick={()=>setDeleteConfirm(null)} style={{...btnStyle,background:"#F1F5F9",color:C.text}}>Cancelar</button>
+              <button onClick={handleDelete} style={{...btnStyle,background:C.danger}}>Sí, Eliminar</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
