@@ -120,6 +120,10 @@ export default function CxcView({
   const [selectedIngresos, setSelectedIngresos] = useState(new Set());
   const [bulkFechaModal, setBulkFechaModal] = useState(false);
   const [cobroMasivoModal, setCobroMasivoModal] = useState(false);
+  const [tasModal, setTasModal] = useState(false);
+  const [tasPreview, setTasPreview] = useState(null); // {rows, dupes}
+  const [tasCatDefault, setTasCatDefault] = useState("");
+  const [tasImportando, setTasImportando] = useState(false);
 
   /* ── Derived data ──────────────────────────────────────────── */
   const allInvoices = useMemo(() => [
@@ -373,10 +377,9 @@ export default function CxcView({
           return +(String(v).replace(/[$,\s]/g, "")) || 0;
         };
 
-        // Existing ingresos for dupe detection
-        const existingKeys = new Set(ingresos.map(i =>
-          `${(i.cliente||"").toLowerCase()}|${i.fecha}|${i.monto}`
-        ));
+        // UUID-based dupe detection (falls back to cliente+fecha+monto if no UUID)
+        const existingUUIDs = new Set(ingresos.map(i=>(i.notas||"").trim().toLowerCase()).filter(Boolean));
+        const existingKeys = new Set(ingresos.map(i => `${(i.cliente||"").toLowerCase()}|${i.fecha}|${i.monto}`));
 
         const newRows = [];
         const dupeRows = [];
@@ -398,11 +401,18 @@ export default function CxcView({
 
           if (!cliente || !monto) return;
 
-          const key = `${cliente.toLowerCase()}|${fecha}|${monto}`;
-          if (existingKeys.has(key)) {
+          // Check dupe: UUID first, then cliente+fecha+monto
+          const uuidLow = uuid ? uuid.toLowerCase() : "";
+          if (uuidLow && existingUUIDs.has(uuidLow)) {
             dupeRows.push({ cliente, fecha, monto, moneda });
             return;
           }
+          const key = `${cliente.toLowerCase()}|${fecha}|${monto}`;
+          if (!uuidLow && existingKeys.has(key)) {
+            dupeRows.push({ cliente, fecha, monto, moneda });
+            return;
+          }
+          if (uuidLow) existingUUIDs.add(uuidLow);
           existingKeys.add(key);
 
           newRows.push({
@@ -452,7 +462,7 @@ export default function CxcView({
     const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = async ev => {
+    reader.onload = ev => {
       try {
         const wb = XLSX.read(ev.target.result, { type:"array", cellDates:true });
         const ws = wb.Sheets[wb.SheetNames[0]];
@@ -475,9 +485,7 @@ export default function CxcView({
           if (!v) return "";
           if (v instanceof Date) return v.toISOString().split("T")[0];
           const s = String(v).trim();
-          // YYYY-MM-DD
           if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0,10);
-          // serial number
           if (/^\d+$/.test(s)) {
             const d = new Date(Math.round((+s - 25569) * 86400000));
             return d.toISOString().split("T")[0];
@@ -490,31 +498,33 @@ export default function CxcView({
           return +(String(v).replace(/[$,\s]/g,"")) || 0;
         };
 
-        const existingKeys = new Set(ingresos.map(i=>`${(i.cliente||"").toLowerCase()}|${i.fecha}|${i.monto}`));
+        // UUID-based dupe detection
+        const existingUUIDs = new Set(ingresos.map(i=>(i.notas||"").trim().toLowerCase()).filter(Boolean));
+
         const newRows = [];
-        const dupes = [];
+        const dupeRows = [];
 
         rows.slice(hi+1).filter(r=>r.some(c=>c)).forEach(row => {
-          const cliente   = String(get(row,["EMPRESA","NOMBRE","RECEPTOR","CLIENTE"])||"").trim();
-          const segmento  = String(get(row,["SEGMENTO"])||"").trim();
-          const folio     = String(get(row,["CFDI FOLIO","FOLIO"])||"").trim();
-          const uuid      = String(get(row,["CFDI UUID","UUID"])||"").trim();
-          const fechaRaw  = get(row,["FECHA FACTURA","FECHA EMISION","FECHA"]);
-          const fecha     = parseDate(fechaRaw);
-          const vencRaw   = get(row,["FECHA VENCIMIENTO","VENCIMIENTO"]);
-          const fechaVencimiento = parseDate(vencRaw);
-          const contableRaw = get(row,["ASIENTO CONTABLE","FECHA CONTABLE","CONTABLE"]);
-          const fechaContable = parseDate(contableRaw);
-          const monedaRaw = String(get(row,["MONEDA"])||"MXN").toUpperCase();
-          const moneda    = monedaRaw.includes("USD")?"USD":monedaRaw.includes("EUR")?"EUR":"MXN";
-          const monto     = cleanNum(get(row,["IMPORTE ADEUDADO","TOTAL","IMPORTE"]));
-          const concepto  = String(get(row,["LÍNEAS DE FACTURA","LINEAS DE FACTURA","PRODUCTO","DESCRIPCION"])||folio).trim();
+          const cliente    = String(get(row,["EMPRESA","NOMBRE","RECEPTOR","CLIENTE"])||"").trim();
+          const segmento   = String(get(row,["SEGMENTO"])||"").trim();
+          const folio      = String(get(row,["CFDI FOLIO","FOLIO"])||"").trim();
+          const uuid       = String(get(row,["CFDI UUID","UUID"])||"").trim();
+          const fecha      = parseDate(get(row,["FECHA FACTURA","FECHA EMISION","FECHA"]));
+          const fechaVencimiento = parseDate(get(row,["FECHA VENCIMIENTO","VENCIMIENTO"]));
+          const fechaContable = parseDate(get(row,["ASIENTO CONTABLE","FECHA CONTABLE","CONTABLE"]));
+          const monedaRaw  = String(get(row,["MONEDA"])||"MXN").toUpperCase();
+          const moneda     = monedaRaw.includes("USD")?"USD":monedaRaw.includes("EUR")?"EUR":"MXN";
+          const monto      = cleanNum(get(row,["IMPORTE ADEUDADO","TOTAL","IMPORTE"]));
+          const concepto   = String(get(row,["LÍNEAS DE FACTURA","LINEAS DE FACTURA","PRODUCTO","DESCRIPCION"])||folio).trim();
 
           if (!cliente || !monto) return;
 
-          const key = `${cliente.toLowerCase()}|${fecha}|${monto}`;
-          if (existingKeys.has(key)) { dupes.push({cliente,fecha,monto,moneda}); return; }
-          existingKeys.add(key);
+          // Dupe by UUID
+          if (uuid && existingUUIDs.has(uuid.toLowerCase())) {
+            dupeRows.push({ cliente, concepto, fecha, monto, moneda, uuid });
+            return;
+          }
+          if (uuid) existingUUIDs.add(uuid.toLowerCase());
 
           newRows.push({
             id: Math.random().toString(36).slice(2,10),
@@ -525,21 +535,33 @@ export default function CxcView({
           });
         });
 
-        // Save directly
-        if (newRows.length === 0) { alert("No se encontraron registros nuevos."); return; }
-        const saved = [];
-        for (const row of newRows) {
-          const s = await upsertIngreso(row);
-          saved.push(s);
-        }
-        setIngresos(prev=>[...saved,...prev]);
-        alert(`✅ Importados ${saved.length} registros. ${dupes.length} duplicados omitidos.`);
+        setTasPreview({ rows: newRows, dupes: dupeRows });
+        setTasCatDefault(catList[0]||"");
+        setTasModal(true);
       } catch(err) {
         alert("Error al leer el archivo: "+err.message);
       }
     };
     reader.readAsArrayBuffer(file);
     e.target.value="";
+  };
+
+  const confirmarTasImport = async () => {
+    if (!tasPreview?.rows?.length) return;
+    setTasImportando(true);
+    const rowsToSave = tasPreview.rows.map(r => ({
+      ...r,
+      categoria: r.segmento || tasCatDefault || catList[0] || "Otro",
+    }));
+    const saved = [];
+    for (const row of rowsToSave) {
+      const s = await upsertIngreso(row);
+      saved.push(s);
+    }
+    setIngresos(prev => [...saved, ...prev]);
+    setTasPreview(null);
+    setTasModal(false);
+    setTasImportando(false);
   };
 
   /* ── Ingreso Form Modal ─────────────────────────────────────── */
@@ -1503,7 +1525,7 @@ export default function CxcView({
           </div>
           {/* Importar Excel TravelAirSolutions */}
           {empresaId === "empresa_2" && (
-            <button onClick={()=>tasImportRef.current?.click()} style={{...btnStyle,background:"#C0392B",color:"#fff",padding:"8px 16px",fontSize:13}}>✈️ Importar TAS</button>
+            <button onClick={()=>{setTasPreview(null);setTasModal(true);}} style={{...btnStyle,background:"#C0392B",color:"#fff",padding:"8px 16px",fontSize:13}}>✈️ Importar TAS</button>
           )}
           <button onClick={()=>{setImportPreview(null);setImportModal(true);}} style={{...btnStyle,background:"#00897B",color:"#fff",padding:"8px 16px",fontSize:13}}>📥 Importar Excel</button>
           <button onClick={()=>setModalIngreso({id:"",cliente:"",concepto:"",categoria:catList[0]||"Circuito",monto:"",moneda:"MXN",tipoCambio:1,fecha:today(),notas:""})} style={btnStyle}>
@@ -2098,6 +2120,121 @@ export default function CxcView({
           setBulkFechaModal(false);
         }}
       />}
+
+      {/* TAS Import Modal */}
+      {tasModal && (
+        <ModalShell title="✈️ Importar Facturas TravelAirSolutions" onClose={()=>{setTasModal(false);setTasPreview(null);}} wide>
+          {!tasPreview ? (
+            <div>
+              {/* Upload zone */}
+              <div onClick={()=>tasImportRef.current?.click()}
+                style={{border:`2px dashed ${C.border}`,borderRadius:14,padding:40,textAlign:"center",cursor:"pointer",background:"#FFF5F5",marginBottom:20,transition:"border-color .2s"}}
+                onMouseEnter={e=>{e.currentTarget.style.borderColor="#C0392B";}}
+                onMouseLeave={e=>{e.currentTarget.style.borderColor=C.border;}}>
+                <div style={{fontSize:44,marginBottom:10}}>✈️</div>
+                <div style={{fontSize:16,fontWeight:700,color:C.navy,marginBottom:4}}>Selecciona el archivo Excel de TAS</div>
+                <div style={{fontSize:13,color:C.muted,marginBottom:16}}>Formatos: .xlsx · .xls</div>
+                <button style={{...btnStyle,background:"#C0392B"}} onClick={e=>{e.stopPropagation();tasImportRef.current?.click();}}>Seleccionar archivo</button>
+              </div>
+              {/* Expected format */}
+              <div style={{background:"#FFF5F5",border:"1px solid #FFCDD2",borderRadius:12,padding:16}}>
+                <div style={{fontWeight:700,color:"#C0392B",marginBottom:10,fontSize:13}}>📋 Columnas esperadas del Excel TAS</div>
+                <div style={{overflowX:"auto"}}>
+                  <table style={{borderCollapse:"collapse",fontSize:11,minWidth:700}}>
+                    <thead><tr style={{background:"#C0392B"}}>
+                      {["SEGMENTO","Empresa/Nombre","CFDI Folio","CFDI UUID","Fecha factura","Fecha vencimiento","Moneda","Importe adeudado","Asiento contable/Fecha"].map(h=>(
+                        <th key={h} style={{padding:"6px 10px",color:"#fff",fontWeight:600,fontSize:10,whiteSpace:"nowrap"}}>{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody><tr style={{background:"#fff"}}>
+                      {["TRF","VIAJES LIBERO","AA/2026/0122","1b5f4cbe-e269…","10/03/2026","09/04/2026","MXN","23,103.60","27/02/2026"].map((v,i)=>(
+                        <td key={i} style={{padding:"6px 10px",borderBottom:`1px solid ${C.border}`,fontSize:11,textAlign:"center"}}>{v}</td>
+                      ))}
+                    </tr></tbody>
+                  </table>
+                </div>
+                <div style={{fontSize:11,color:C.muted,marginTop:10}}>
+                  💡 Duplicados detectados por <b>CFDI UUID</b>. Si ya existe el UUID en la app, la factura se omite automáticamente.
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div>
+              {/* Preview results */}
+              <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
+                <div style={{background:"#E8F5E9",border:"1px solid #A5D6A7",borderRadius:10,padding:"10px 18px"}}>
+                  <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase"}}>Nuevos</div>
+                  <div style={{fontSize:24,fontWeight:900,color:C.ok}}>{tasPreview.rows.length}</div>
+                </div>
+                <div style={{background:"#FFF3E0",border:"1px solid #FFCC80",borderRadius:10,padding:"10px 18px"}}>
+                  <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase"}}>Duplicados (omitidos)</div>
+                  <div style={{fontSize:24,fontWeight:900,color:C.warn}}>{tasPreview.dupes.length}</div>
+                </div>
+              </div>
+
+              {/* Categoría default */}
+              <div style={{background:"#F8FAFC",border:`1px solid ${C.border}`,borderRadius:10,padding:14,marginBottom:16}}>
+                <div style={{fontSize:13,fontWeight:700,color:C.navy,marginBottom:8}}>Asignar categoría a registros sin segmento:</div>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                  {catList.map(cat => {
+                    const cs = getCatStyle(cat);
+                    return (
+                      <button key={cat} onClick={()=>setTasCatDefault(cat)}
+                        style={{padding:"5px 14px",borderRadius:20,border:`2px solid ${tasCatDefault===cat?cs.text:C.border}`,background:tasCatDefault===cat?cs.bg:"#fff",color:tasCatDefault===cat?cs.text:C.text,cursor:"pointer",fontWeight:tasCatDefault===cat?700:500,fontSize:12,fontFamily:"inherit"}}>
+                        {cat}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Preview table */}
+              {tasPreview.rows.length > 0 && (
+                <div style={{maxHeight:280,overflowY:"auto",border:`1px solid ${C.border}`,borderRadius:10,marginBottom:16}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                    <thead style={{position:"sticky",top:0}}>
+                      <tr style={{background:"#C0392B"}}>
+                        {["Cliente","Concepto","Segmento","Fecha","Vencimiento","F.Contable","Monto","Moneda"].map(h=>(
+                          <th key={h} style={{padding:"8px 10px",color:"#fff",fontWeight:600,fontSize:10,textTransform:"uppercase",textAlign:h==="Monto"?"right":"left"}}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tasPreview.rows.map((r,i)=>(
+                        <tr key={i} style={{borderBottom:`1px solid ${C.border}`,background:i%2===0?"#fff":"#FFF5F5"}}>
+                          <td style={{padding:"7px 10px",fontWeight:600,color:C.navy}}>{r.cliente}</td>
+                          <td style={{padding:"7px 10px",color:C.muted,fontSize:11}}>{r.concepto||"—"}</td>
+                          <td style={{padding:"7px 10px"}}><span style={{background:"#FFEBEE",color:"#C0392B",padding:"1px 7px",borderRadius:20,fontSize:10,fontWeight:700}}>{r.segmento||"—"}</span></td>
+                          <td style={{padding:"7px 10px",fontSize:11,color:C.muted}}>{r.fecha||"—"}</td>
+                          <td style={{padding:"7px 10px",fontSize:11,color:C.muted}}>{r.fechaVencimiento||"—"}</td>
+                          <td style={{padding:"7px 10px",fontSize:11,color:C.teal}}>{r.fechaContable||"—"}</td>
+                          <td style={{padding:"7px 10px",fontWeight:700,textAlign:"right"}}>{r.moneda==="EUR"?"€":"$"}{fmt(r.monto)}</td>
+                          <td style={{padding:"7px 10px"}}><span style={{background:{MXN:"#E3F2FD",USD:"#E8F5E9",EUR:"#F3E5F5"}[r.moneda],color:{MXN:C.mxn,USD:C.usd,EUR:C.eur}[r.moneda],padding:"2px 7px",borderRadius:20,fontSize:10,fontWeight:700}}>{r.moneda}</span></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {tasPreview.rows.length === 0 && (
+                <div style={{textAlign:"center",padding:24,color:C.muted,background:"#FFF3E0",borderRadius:10,marginBottom:16}}>
+                  ⚠️ Todos los registros del archivo ya existen (UUID duplicado) — no hay nada nuevo que importar.
+                </div>
+              )}
+
+              <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+                <button onClick={()=>setTasPreview(null)} style={{...btnStyle,background:"#F1F5F9",color:C.text}}>← Cambiar archivo</button>
+                <button disabled={tasPreview.rows.length===0||tasImportando}
+                  onClick={confirmarTasImport}
+                  style={{...btnStyle,background:"#C0392B",opacity:(tasPreview.rows.length===0||tasImportando)?0.5:1}}>
+                  {tasImportando ? "Importando…" : `✅ Importar ${tasPreview.rows.length} factura${tasPreview.rows.length!==1?"s":""}`}
+                </button>
+              </div>
+            </div>
+          )}
+        </ModalShell>
+      )}
 
       {/* Cobro Masivo Modal */}
       {cobroMasivoModal && <CobroMasivoModal
