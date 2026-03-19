@@ -96,7 +96,9 @@ export default function CxcView({
   const [filtroFechaFrom, setFiltroFechaFrom] = useState("");
   const [filtroFechaTo, setFiltroFechaTo] = useState("");
   const [filtroSearch, setFiltroSearch] = useState("");
-  const [filtroCobro, setFiltroCobro] = useState(""); // "" | "cobrado" | "porCobrar"
+  const [filtroCobro, setFiltroCobro] = useState("");
+  const [filtroMesContable, setFiltroMesContable] = useState("");
+  const [filtroSegmento, setFiltroSegmento] = useState(""); // "" | "cobrado" | "porCobrar"
 
   /* ── Modals ────────────────────────────────────────────────── */
   const [modalIngreso, setModalIngreso] = useState(null);
@@ -114,6 +116,7 @@ export default function CxcView({
   const [importCatDefault, setImportCatDefault] = useState("");
   const [importando, setImportando] = useState(false);
   const importRef = useRef();
+  const tasImportRef = useRef();
   const [selectedIngresos, setSelectedIngresos] = useState(new Set());
   const [bulkFechaModal, setBulkFechaModal] = useState(false);
   const [cobroMasivoModal, setCobroMasivoModal] = useState(false);
@@ -124,6 +127,30 @@ export default function CxcView({
     ...invoices.USD.map(i=>({...i,moneda:"USD"})),
     ...invoices.EUR.map(i=>({...i,moneda:"EUR"})),
   ], [invoices]);
+
+  // Days diff helper
+  const diasDiff = (fechaStr) => {
+    if (!fechaStr) return null;
+    const hoy = new Date(); hoy.setHours(0,0,0,0);
+    const f = new Date(fechaStr+"T12:00:00");
+    return Math.round((f - hoy) / 86400000);
+  };
+
+  // Segmentos únicos para filtro
+  const segmentosList = useMemo(() => {
+    const s = new Set(ingresos.map(i=>i.segmento).filter(Boolean));
+    return [...s].sort();
+  }, [ingresos]);
+
+  // Meses únicos de fechaContable para filtro "Mes de Venta"
+  const MESES_NOMBRES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const mesesContableList = useMemo(() => {
+    const s = new Set();
+    ingresos.forEach(i => {
+      if (i.fechaContable) s.add(i.fechaContable.slice(0,7)); // YYYY-MM
+    });
+    return [...s].sort();
+  }, [ingresos]);
 
   const catList = categorias.length > 0 ? categorias.map(c=>c.nombre) : DEFAULT_CATS;
   const clientesList = [...new Set(ingresos.map(i=>i.cliente))].filter(Boolean).sort();
@@ -220,24 +247,21 @@ export default function CxcView({
     return ingresos.filter(ing => {
       if (filtroSearch) {
         const q = filtroSearch.toLowerCase();
-        if (!(ing.cliente+ing.concepto+ing.categoria).toLowerCase().includes(q)) return false;
+        if (!(ing.cliente+ing.concepto+ing.categoria+(ing.segmento||"")).toLowerCase().includes(q)) return false;
       }
       if (filtroCliente && ing.cliente !== filtroCliente) return false;
       if (filtroCategoria && ing.categoria !== filtroCategoria) return false;
       if (filtroMoneda && ing.moneda !== filtroMoneda) return false;
       if (filtroFechaFrom && ing.fecha && ing.fecha < filtroFechaFrom) return false;
       if (filtroFechaTo && ing.fecha && ing.fecha > filtroFechaTo) return false;
-      if (filtroCobro === "cobrado") {
-        const m = metrics[ing.id] || {};
-        if ((m.totalCobrado||0) <= 0) return false;
-      }
-      if (filtroCobro === "porCobrar") {
-        const m = metrics[ing.id] || {};
-        if ((m.porCobrar||0) <= 0) return false;
-      }
+      if (filtroCobro === "cobrado") { const m=metrics[ing.id]||{}; if((m.totalCobrado||0)<=0) return false; }
+      if (filtroCobro === "porCobrar") { const m=metrics[ing.id]||{}; if((m.porCobrar||0)<=0) return false; }
+      if (filtroMesContable && ing.fechaContable && !ing.fechaContable.startsWith(filtroMesContable)) return false;
+      if (filtroMesContable && !ing.fechaContable) return false;
+      if (filtroSegmento && ing.segmento !== filtroSegmento) return false;
       return true;
     });
-  }, [ingresos, filtroSearch, filtroCliente, filtroCategoria, filtroMoneda, filtroFechaFrom, filtroFechaTo, filtroCobro, metrics]);
+  }, [ingresos, filtroSearch, filtroCliente, filtroCategoria, filtroMoneda, filtroFechaFrom, filtroFechaTo, filtroCobro, filtroMesContable, filtroSegmento, metrics]);
 
   /* Agrupado por cliente */
   const groupedByCliente = useMemo(() => {
@@ -421,6 +445,101 @@ export default function CxcView({
     setImportPreview(null);
     setImportModal(false);
     setImportando(false);
+  };
+
+  /* ── TAS (TravelAirSolutions) Excel import ───────────────────── */
+  const handleTasImport = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async ev => {
+      try {
+        const wb = XLSX.read(ev.target.result, { type:"array", cellDates:true });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws, { header:1, raw:false, dateNF:'yyyy-mm-dd' });
+
+        // Find header row
+        let hi = rows.findIndex(r => r.some(c => String(c||"").toUpperCase().includes("SEGMENTO")));
+        if (hi < 0) hi = 0;
+        const headers = rows[hi].map(h => String(h||"").trim().toUpperCase());
+
+        const get = (row, keys) => {
+          for (const k of keys) {
+            const idx = headers.findIndex(h => h.includes(k));
+            if (idx >= 0 && row[idx] !== undefined && row[idx] !== "" && row[idx] !== null) return row[idx];
+          }
+          return "";
+        };
+
+        const parseDate = v => {
+          if (!v) return "";
+          if (v instanceof Date) return v.toISOString().split("T")[0];
+          const s = String(v).trim();
+          // YYYY-MM-DD
+          if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0,10);
+          // serial number
+          if (/^\d+$/.test(s)) {
+            const d = new Date(Math.round((+s - 25569) * 86400000));
+            return d.toISOString().split("T")[0];
+          }
+          return s;
+        };
+
+        const cleanNum = v => {
+          if (!v && v !== 0) return 0;
+          return +(String(v).replace(/[$,\s]/g,"")) || 0;
+        };
+
+        const existingKeys = new Set(ingresos.map(i=>`${(i.cliente||"").toLowerCase()}|${i.fecha}|${i.monto}`));
+        const newRows = [];
+        const dupes = [];
+
+        rows.slice(hi+1).filter(r=>r.some(c=>c)).forEach(row => {
+          const cliente   = String(get(row,["EMPRESA","NOMBRE","RECEPTOR","CLIENTE"])||"").trim();
+          const segmento  = String(get(row,["SEGMENTO"])||"").trim();
+          const folio     = String(get(row,["CFDI FOLIO","FOLIO"])||"").trim();
+          const uuid      = String(get(row,["CFDI UUID","UUID"])||"").trim();
+          const fechaRaw  = get(row,["FECHA FACTURA","FECHA EMISION","FECHA"]);
+          const fecha     = parseDate(fechaRaw);
+          const vencRaw   = get(row,["FECHA VENCIMIENTO","VENCIMIENTO"]);
+          const fechaVencimiento = parseDate(vencRaw);
+          const contableRaw = get(row,["ASIENTO CONTABLE","FECHA CONTABLE","CONTABLE"]);
+          const fechaContable = parseDate(contableRaw);
+          const monedaRaw = String(get(row,["MONEDA"])||"MXN").toUpperCase();
+          const moneda    = monedaRaw.includes("USD")?"USD":monedaRaw.includes("EUR")?"EUR":"MXN";
+          const monto     = cleanNum(get(row,["IMPORTE ADEUDADO","TOTAL","IMPORTE"]));
+          const concepto  = String(get(row,["LÍNEAS DE FACTURA","LINEAS DE FACTURA","PRODUCTO","DESCRIPCION"])||folio).trim();
+
+          if (!cliente || !monto) return;
+
+          const key = `${cliente.toLowerCase()}|${fecha}|${monto}`;
+          if (existingKeys.has(key)) { dupes.push({cliente,fecha,monto,moneda}); return; }
+          existingKeys.add(key);
+
+          newRows.push({
+            id: Math.random().toString(36).slice(2,10),
+            cliente, concepto: concepto||folio, categoria: segmento||"",
+            segmento, monto, moneda, tipoCambio:1, fecha, notas:uuid,
+            fechaVencimiento, fechaContable, diasCredito:0, fechaFicticia:"",
+            empresaId,
+          });
+        });
+
+        // Save directly
+        if (newRows.length === 0) { alert("No se encontraron registros nuevos."); return; }
+        const saved = [];
+        for (const row of newRows) {
+          const s = await upsertIngreso(row);
+          saved.push(s);
+        }
+        setIngresos(prev=>[...saved,...prev]);
+        alert(`✅ Importados ${saved.length} registros. ${dupes.length} duplicados omitidos.`);
+      } catch(err) {
+        alert("Error al leer el archivo: "+err.message);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value="";
   };
 
   /* ── Ingreso Form Modal ─────────────────────────────────────── */
@@ -1070,14 +1189,12 @@ export default function CxcView({
     const m = metrics[ing.id] || {};
     const catStyle = getCatStyle(ing.categoria);
     const sym = monedaSym(ing.moneda);
-    const disponPct = ing.monto > 0 ? Math.max(0,Math.min(100,(m.disponible||0)/ing.monto*100)) : 0;
     const cobradoPct = ing.monto > 0 ? Math.min(100,(m.totalCobrado||0)/ing.monto*100) : 0;
     const disponColor = (m.disponible||0) > 0 ? C.teal : (m.disponible||0) === 0 ? C.muted : C.danger;
     const isSelected = selectedIngresos.has(ing.id);
-    // Fecha efectiva para proyección
-    const fechaEfectiva = ing.fechaFicticia || ing.fechaVencimiento || "";
+    const diffDias = diasDiff(ing.fechaVencimiento);
     const hoy = today();
-    const venceProx = fechaEfectiva && fechaEfectiva < hoy;
+    const venceProx = ing.fechaVencimiento && ing.fechaVencimiento < hoy;
 
     return (
       <tr style={{borderTop:`1px solid ${C.border}`,background:isSelected?"#E8F0FE":idx%2===0?C.surface:"#FAFBFC",cursor:"pointer",transition:"background .12s"}}
@@ -1090,15 +1207,48 @@ export default function CxcView({
             setSelectedIngresos(prev=>{const n=new Set(prev);if(n.has(ing.id))n.delete(ing.id);else n.add(ing.id);return n;});
           }} style={{cursor:"pointer",width:15,height:15,accentColor:C.blue}}/>
         </td>
+        {/* Segmento */}
+        <td style={{padding:"10px 8px"}} onClick={e=>e.stopPropagation()}>
+          <input value={ing.segmento||""} onChange={e=>{
+            const val=e.target.value;
+            setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,segmento:val}:i));
+            updateIngresoField(ing.id,{segmento:val});
+          }} placeholder="—" style={{padding:"3px 7px",fontSize:11,border:`1px solid ${C.border}`,borderRadius:6,width:70,fontFamily:"inherit",background:"#FAFBFC"}}
+          onClick={e=>e.stopPropagation()}/>
+        </td>
         <td style={{padding:"12px 10px",fontWeight:700,color:C.navy,maxWidth:130,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ing.cliente}</td>
         <td style={{padding:"12px 10px",color:ing.concepto?C.text:C.muted,fontStyle:ing.concepto?"normal":"italic",minWidth:160,maxWidth:220,whiteSpace:"normal",lineHeight:1.4,wordBreak:"break-word"}}>{ing.concepto||"—"}</td>
         <td style={{padding:"12px 10px"}}>
           <span style={{background:catStyle.bg,color:catStyle.text,border:`1px solid ${catStyle.border}`,padding:"2px 9px",borderRadius:20,fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>{ing.categoria}</span>
         </td>
+        {/* Fecha Contable */}
+        <td style={{padding:"10px 8px"}} onClick={e=>e.stopPropagation()}>
+          <input type="date" value={ing.fechaContable||""} onChange={e=>{
+            const val=e.target.value;
+            setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,fechaContable:val}:i));
+            updateIngresoField(ing.id,{fechaContable:val});
+          }} style={{padding:"3px 6px",fontSize:11,border:`1px solid ${ing.fechaContable?C.teal:C.border}`,borderRadius:6,color:ing.fechaContable?C.teal:C.text,width:125,fontFamily:"inherit"}}/>
+        </td>
         <td style={{padding:"12px 10px",whiteSpace:"nowrap",fontSize:12,color:C.muted}}>{ing.fecha||"—"}</td>
         {/* Vencimiento */}
-        <td style={{padding:"12px 10px",whiteSpace:"nowrap",fontSize:12,color:ing.fechaVencimiento?(venceProx?C.danger:C.text):C.muted,fontWeight:ing.fechaVencimiento?600:400}}>
+        <td style={{padding:"12px 10px",whiteSpace:"nowrap",fontSize:12,color:venceProx?C.danger:ing.fechaVencimiento?C.text:C.muted,fontWeight:ing.fechaVencimiento?600:400}}>
           {ing.fechaVencimiento||"—"}
+        </td>
+        {/* Días Vencidos */}
+        <td style={{padding:"10px 8px",textAlign:"center"}}>
+          {diffDias!==null && diffDias<0 ? (
+            <span style={{background:"#FFEBEE",color:C.danger,fontWeight:800,fontSize:12,padding:"3px 8px",borderRadius:20,whiteSpace:"nowrap"}}>
+              {Math.abs(diffDias)}d
+            </span>
+          ) : <span style={{color:C.muted,fontSize:11}}>—</span>}
+        </td>
+        {/* Por Vencer */}
+        <td style={{padding:"10px 8px",textAlign:"center"}}>
+          {diffDias!==null && diffDias>=0 ? (
+            <span style={{background:diffDias<=7?"#FFF3E0":diffDias<=30?"#FFFDE7":"#E8F5E9",color:diffDias<=7?C.danger:diffDias<=30?C.warn:C.ok,fontWeight:800,fontSize:12,padding:"3px 8px",borderRadius:20,whiteSpace:"nowrap"}}>
+              {diffDias}d
+            </span>
+          ) : <span style={{color:C.muted,fontSize:11}}>—</span>}
         </td>
         {/* Fecha ficticia */}
         <td style={{padding:"12px 8px",whiteSpace:"nowrap"}} onClick={e=>e.stopPropagation()}>
@@ -1106,21 +1256,17 @@ export default function CxcView({
             const val = e.target.value;
             setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,fechaFicticia:val}:i));
             updateIngresoField(ing.id,{fechaFicticia:val});
-          }} style={{...inputStyle,padding:"3px 6px",fontSize:11,width:130,border:`1px solid ${ing.fechaFicticia?"#7B1FA2":C.border}`,color:ing.fechaFicticia?"#7B1FA2":C.text}}
-          title="Fecha ficticia de cobro (usada en proyección)"/>
+          }} style={{...inputStyle,padding:"3px 6px",fontSize:11,width:130,border:`1px solid ${ing.fechaFicticia?"#7B1FA2":C.border}`,color:ing.fechaFicticia?"#7B1FA2":C.text}}/>
         </td>
         <td style={{padding:"12px 10px",fontWeight:700,textAlign:"right"}}>{sym}{fmt(ing.monto)}</td>
         <td style={{padding:"12px 10px",fontWeight:600,color:C.ok,textAlign:"right"}}>{sym}{fmt(m.totalCobrado||0)}</td>
         <td style={{padding:"12px 10px",fontWeight:600,color:(m.porCobrar||0)>0?C.warn:C.ok,textAlign:"right"}}>{sym}{fmt(m.porCobrar||0)}</td>
         <td style={{padding:"12px 10px",fontWeight:600,color:C.danger,textAlign:"right"}}>{sym}{fmt(m.consumido||0)}</td>
         <td style={{padding:"12px 10px",textAlign:"right"}}>
-          <span style={{fontWeight:700,color:"#E65100",background:(m.porPagar||0)>0?"#FFF3E0":"transparent",padding:(m.porPagar||0)>0?"2px 6px":"0",borderRadius:6}}>
-            {sym}{fmt(m.porPagar||0)}
-          </span>
+          <span style={{fontWeight:700,color:"#E65100",background:(m.porPagar||0)>0?"#FFF3E0":"transparent",padding:(m.porPagar||0)>0?"2px 6px":"0",borderRadius:6}}>{sym}{fmt(m.porPagar||0)}</span>
         </td>
         <td style={{padding:"12px 10px",textAlign:"right"}}>
           <span style={{fontWeight:800,color:disponColor}}>{sym}{fmt(m.disponible||0)}</span>
-          {ing.moneda !== "MXN" && <div style={{fontSize:9,color:C.muted}}>TC:{fmt(ing.tipoCambio)}</div>}
         </td>
         <td style={{padding:"12px 10px",textAlign:"right"}}>
           <span style={{fontWeight:800,color:(m.disponibleNeto||0)>=0?C.green:C.danger,background:(m.disponibleNeto||0)>=0?"#E8F5E9":"#FFEBEE",padding:"2px 7px",borderRadius:6}}>
@@ -1135,6 +1281,7 @@ export default function CxcView({
       </tr>
     );
   };
+
 
   /* ── Proyección en Calendario ───────────────────────────────── */
   const ProyeccionCalendario = () => {
@@ -1354,14 +1501,19 @@ export default function CxcView({
             <button onClick={()=>setVistaGrupo("cliente")} style={{padding:"8px 14px",border:"none",background:vistaGrupo==="cliente"?C.navy:"#F1F5F9",color:vistaGrupo==="cliente"?"#fff":C.text,fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>👥 Por cliente</button>
             <button onClick={()=>setVistaGrupo("ingreso")} style={{padding:"8px 14px",border:"none",background:vistaGrupo==="ingreso"?C.navy:"#F1F5F9",color:vistaGrupo==="ingreso"?"#fff":C.text,fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>📋 Por ingreso</button>
           </div>
+          {/* Importar Excel TravelAirSolutions */}
+          {empresaId === "empresa_2" && (
+            <button onClick={()=>tasImportRef.current?.click()} style={{...btnStyle,background:"#C0392B",color:"#fff",padding:"8px 16px",fontSize:13}}>✈️ Importar TAS</button>
+          )}
           <button onClick={()=>{setImportPreview(null);setImportModal(true);}} style={{...btnStyle,background:"#00897B",color:"#fff",padding:"8px 16px",fontSize:13}}>📥 Importar Excel</button>
           <button onClick={()=>setModalIngreso({id:"",cliente:"",concepto:"",categoria:catList[0]||"Circuito",monto:"",moneda:"MXN",tipoCambio:1,fecha:today(),notas:""})} style={btnStyle}>
             + Nuevo Ingreso
           </button>
         </div>
       </div>
-      {/* Hidden file input for import */}
+      {/* Hidden file inputs */}
       <input ref={importRef} type="file" accept=".xlsx,.xls" onChange={handleImportFile} style={{display:"none"}}/>
+      <input ref={tasImportRef} type="file" accept=".xlsx,.xls" onChange={handleTasImport} style={{display:"none"}}/>
 
       {/* KPI Cards — per currency */}
       <div style={{display:"flex",gap:12,flexWrap:"wrap",margin:"20px 0"}}>
@@ -1518,16 +1670,30 @@ export default function CxcView({
             <option value="USD">🇺🇸 USD</option>
             <option value="EUR">🇪🇺 EUR</option>
           </select>
-          {/* Filtro Cobrado / Por Cobrar */}
           <select value={filtroCobro} onChange={e=>setFiltroCobro(e.target.value)} style={{...selectStyle,maxWidth:160}}>
             <option value="">💵 Todos</option>
             <option value="cobrado">✅ Con cobros</option>
             <option value="porCobrar">⏳ Por cobrar</option>
           </select>
+          {/* Mes de Venta (Fecha Contable) */}
+          <select value={filtroMesContable} onChange={e=>setFiltroMesContable(e.target.value)} style={{...selectStyle,maxWidth:170,borderColor:filtroMesContable?"#7B1FA2":C.border,color:filtroMesContable?"#7B1FA2":C.text}}>
+            <option value="">📅 Mes de Venta</option>
+            {mesesContableList.map(m=>{
+              const [y,mo]=m.split("-");
+              return <option key={m} value={m}>{MESES_NOMBRES[+mo-1]} {y}</option>;
+            })}
+          </select>
+          {/* Segmento */}
+          {segmentosList.length > 0 && (
+            <select value={filtroSegmento} onChange={e=>setFiltroSegmento(e.target.value)} style={{...selectStyle,maxWidth:150}}>
+              <option value="">Todos los segmentos</option>
+              {segmentosList.map(s=><option key={s}>{s}</option>)}
+            </select>
+          )}
           <input type="date" value={filtroFechaFrom} onChange={e=>setFiltroFechaFrom(e.target.value)} style={{...inputStyle,maxWidth:150}} title="Desde"/>
           <input type="date" value={filtroFechaTo} onChange={e=>setFiltroFechaTo(e.target.value)} style={{...inputStyle,maxWidth:150}} title="Hasta"/>
-          {(filtroSearch||filtroCliente||filtroCategoria||filtroMoneda||filtroFechaFrom||filtroFechaTo||filtroCobro) && (
-            <button onClick={()=>{setFiltroSearch("");setFiltroCliente("");setFiltroCategoria("");setFiltroMoneda("");setFiltroFechaFrom("");setFiltroFechaTo("");setFiltroCobro("");}} style={{...btnStyle,background:"#F1F5F9",color:C.text,padding:"7px 14px",fontSize:12}}>✕ Limpiar</button>
+          {(filtroSearch||filtroCliente||filtroCategoria||filtroMoneda||filtroFechaFrom||filtroFechaTo||filtroCobro||filtroMesContable||filtroSegmento) && (
+            <button onClick={()=>{setFiltroSearch("");setFiltroCliente("");setFiltroCategoria("");setFiltroMoneda("");setFiltroFechaFrom("");setFiltroFechaTo("");setFiltroCobro("");setFiltroMesContable("");setFiltroSegmento("");}} style={{...btnStyle,background:"#F1F5F9",color:C.text,padding:"7px 14px",fontSize:12}}>✕ Limpiar</button>
           )}
         </div>
       </div>
@@ -1645,8 +1811,8 @@ export default function CxcView({
                                 });
                               }}/>
                           </th>
-                          {["Concepto","Categoría","Fecha","Vencimiento","Fecha Ficticia","Monto","Cobrado","Por Cobrar","Consumido","Por Pagar","Disponible","D. Neto","Acciones"].map(h=>(
-                            <th key={h} style={{padding:"8px 10px",textAlign:["Monto","Cobrado","Por Cobrar","Consumido","Por Pagar","Disponible","D. Neto"].includes(h)?"right":"left",color:C.blue,fontWeight:700,fontSize:10,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
+                          {["Seg.","Concepto","Categoría","F. Contable","Fecha","Vencimiento","Vencidos","Por Vencer","F. Ficticia","Monto","Cobrado","Por Cobrar","Consumido","Por Pagar","Disponible","D. Neto","Acciones"].map(h=>(
+                            <th key={h} style={{padding:"8px 8px",textAlign:["Monto","Cobrado","Por Cobrar","Consumido","Por Pagar","Disponible","D. Neto"].includes(h)?"right":["Vencidos","Por Vencer"].includes(h)?"center":"left",color:C.blue,fontWeight:700,fontSize:10,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
                           ))}
                         </tr>
                       </thead>
@@ -1670,18 +1836,27 @@ export default function CxcView({
                                   setSelectedIngresos(prev=>{const n=new Set(prev);if(n.has(ing.id))n.delete(ing.id);else n.add(ing.id);return n;});
                                 }} style={{cursor:"pointer",accentColor:C.blue}}/>
                               </td>
-                              <td style={{padding:"9px 10px",color:ing.concepto?C.text:C.muted,fontStyle:ing.concepto?"normal":"italic",minWidth:140}}>{ing.concepto||"—"}</td>
-                              <td style={{padding:"9px 10px"}}>
+                              {/* Segmento */}
+                              <td style={{padding:"8px 6px"}} onClick={e=>e.stopPropagation()}>
+                                <input value={ing.segmento||""} onChange={e=>{const v=e.target.value;setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,segmento:v}:i));updateIngresoField(ing.id,{segmento:v});}} placeholder="—" style={{padding:"2px 5px",fontSize:10,border:`1px solid ${C.border}`,borderRadius:5,width:55,fontFamily:"inherit"}}/>
+                              </td>
+                              <td style={{padding:"9px 8px",color:ing.concepto?C.text:C.muted,fontStyle:ing.concepto?"normal":"italic",minWidth:120}}>{ing.concepto||"—"}</td>
+                              <td style={{padding:"9px 8px"}}>
                                 <span style={{background:catStyle.bg,color:catStyle.text,border:`1px solid ${catStyle.border}`,padding:"2px 7px",borderRadius:20,fontSize:10,fontWeight:700,whiteSpace:"nowrap"}}>{ing.categoria||"—"}</span>
                               </td>
-                              <td style={{padding:"9px 10px",whiteSpace:"nowrap",fontSize:11,color:C.muted}}>{ing.fecha||"—"}</td>
-                              <td style={{padding:"9px 10px",whiteSpace:"nowrap",fontSize:11,color:venceProx?C.danger:C.text,fontWeight:ing.fechaVencimiento?600:400}}>{ing.fechaVencimiento||"—"}</td>
-                              <td style={{padding:"9px 8px"}} onClick={e=>e.stopPropagation()}>
-                                <input type="date" value={ing.fechaFicticia||""} onChange={e=>{
-                                  const val=e.target.value;
-                                  setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,fechaFicticia:val}:i));
-                                  updateIngresoField(ing.id,{fechaFicticia:val});
-                                }} style={{padding:"2px 5px",fontSize:10,border:`1px solid ${ing.fechaFicticia?"#7B1FA2":C.border}`,borderRadius:6,color:ing.fechaFicticia?"#7B1FA2":C.text,width:120,fontFamily:"inherit"}}/>
+                              {/* Fecha Contable */}
+                              <td style={{padding:"8px 6px"}} onClick={e=>e.stopPropagation()}>
+                                <input type="date" value={ing.fechaContable||""} onChange={e=>{const v=e.target.value;setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,fechaContable:v}:i));updateIngresoField(ing.id,{fechaContable:v});}} style={{padding:"2px 5px",fontSize:10,border:`1px solid ${ing.fechaContable?C.teal:C.border}`,borderRadius:5,color:ing.fechaContable?C.teal:C.text,width:112,fontFamily:"inherit"}}/>
+                              </td>
+                              <td style={{padding:"9px 8px",whiteSpace:"nowrap",fontSize:11,color:C.muted}}>{ing.fecha||"—"}</td>
+                              <td style={{padding:"9px 8px",whiteSpace:"nowrap",fontSize:11,color:venceProx?C.danger:C.text,fontWeight:ing.fechaVencimiento?600:400}}>{ing.fechaVencimiento||"—"}</td>
+                              {/* Días Vencidos */}
+                              <td style={{padding:"9px 6px",textAlign:"center"}}>{(() => { const d=diasDiff(ing.fechaVencimiento); return d!==null&&d<0?<span style={{background:"#FFEBEE",color:C.danger,fontWeight:800,fontSize:10,padding:"2px 6px",borderRadius:20}}>{Math.abs(d)}d</span>:<span style={{color:C.muted,fontSize:10}}>—</span>; })()}</td>
+                              {/* Por Vencer */}
+                              <td style={{padding:"9px 6px",textAlign:"center"}}>{(() => { const d=diasDiff(ing.fechaVencimiento); return d!==null&&d>=0?<span style={{background:d<=7?"#FFF3E0":d<=30?"#FFFDE7":"#E8F5E9",color:d<=7?C.danger:d<=30?C.warn:C.ok,fontWeight:800,fontSize:10,padding:"2px 6px",borderRadius:20}}>{d}d</span>:<span style={{color:C.muted,fontSize:10}}>—</span>; })()}</td>
+                              {/* Fecha Ficticia */}
+                              <td style={{padding:"8px 6px"}} onClick={e=>e.stopPropagation()}>
+                                <input type="date" value={ing.fechaFicticia||""} onChange={e=>{const v=e.target.value;setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,fechaFicticia:v}:i));updateIngresoField(ing.id,{fechaFicticia:v});}} style={{padding:"2px 5px",fontSize:10,border:`1px solid ${ing.fechaFicticia?"#7B1FA2":C.border}`,borderRadius:5,color:ing.fechaFicticia?"#7B1FA2":C.text,width:112,fontFamily:"inherit"}}/>
                               </td>
                               <td style={{padding:"9px 10px",fontWeight:700,textAlign:"right"}}>{sym}{fmt(ing.monto)}</td>
                               <td style={{padding:"9px 10px",color:C.ok,textAlign:"right"}}>{sym}{fmt(m.totalCobrado||0)}</td>
@@ -1727,8 +1902,8 @@ export default function CxcView({
                         else setSelectedIngresos(new Set(filtered.map(i=>i.id)));
                       }}/>
                   </th>
-                  {["Cliente","Concepto","Categoría","Fecha","Vencimiento","Fecha Ficticia","Monto","Cobrado","Por Cobrar","Consumido","Por Pagar","Disponible","Disp. Neto","Acciones"].map(h=>(
-                    <th key={h} style={{padding:"10px 10px",textAlign:["Monto","Cobrado","Por Cobrar","Consumido","Por Pagar","Disponible","Disp. Neto"].includes(h)?"right":"left",color:"#fff",fontWeight:600,fontSize:11,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
+                  {["Seg.","Cliente","Concepto","Categoría","F. Contable","Fecha","Vencimiento","Vencidos","Por Vencer","F. Ficticia","Monto","Cobrado","Por Cobrar","Consumido","Por Pagar","Disponible","Disp. Neto","Acciones"].map(h=>(
+                    <th key={h} style={{padding:"10px 8px",textAlign:["Monto","Cobrado","Por Cobrar","Consumido","Por Pagar","Disponible","Disp. Neto"].includes(h)?"right":["Vencidos","Por Vencer"].includes(h)?"center":"left",color:"#fff",fontWeight:600,fontSize:10,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
                   ))}
                 </tr>
               </thead>

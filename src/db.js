@@ -284,6 +284,8 @@ const ingresoToApp = (r) => ({
   diasCredito: +r.dias_credito || 30,
   fechaVencimiento: r.fecha_vencimiento || '',
   fechaFicticia: r.fecha_ficticia || '',
+  segmento: r.segmento || '',
+  fechaContable: r.fecha_contable || '',
 });
 
 const ingresoToDB = (i) => ({
@@ -300,6 +302,8 @@ const ingresoToDB = (i) => ({
   dias_credito: i.diasCredito || 30,
   fecha_vencimiento: i.fechaVencimiento || null,
   fecha_ficticia: i.fechaFicticia || null,
+  segmento: i.segmento || null,
+  fecha_contable: i.fechaContable || null,
 });
 
 /* ── Ingresos ────────────────────────────────────────────────── */
@@ -338,6 +342,8 @@ export async function updateIngresoField(id, fields) {
   if ('fechaVencimiento' in fields) dbFields.fecha_vencimiento = fields.fechaVencimiento || null;
   if ('concepto' in fields) dbFields.concepto = fields.concepto;
   if ('categoria' in fields) dbFields.categoria = fields.categoria;
+  if ('segmento' in fields) dbFields.segmento = fields.segmento || null;
+  if ('fechaContable' in fields) dbFields.fecha_contable = fields.fechaContable || null;
   const { error } = await supabase.from('ingresos').update(dbFields).eq('id', id);
   if (error) console.error('updateIngresoField:', error);
 }
