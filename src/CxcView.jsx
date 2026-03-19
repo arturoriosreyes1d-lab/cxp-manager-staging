@@ -1896,16 +1896,16 @@ export default function CxcView({
                       <div style={{fontSize:12,color:C.muted,marginTop:2}}>{ings.length} ingreso{ings.length!==1?"s":""}</div>
                     </div>
                   </div>
-                  {/* KPI chips por moneda */}
-                  <div style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"center"}}>
+                  {/* KPI chips por moneda — grid para alineación perfecta */}
+                  <div style={{display:"flex",flexDirection:"column",gap:6,alignItems:"flex-end"}}>
                     {monedas.map(mon => {
                       const v = byMon[mon];
                       const sym = monedaSym(mon);
                       const monCol = {MXN:C.mxn,USD:C.usd,EUR:C.eur}[mon]||C.navy;
                       const monBg  = {MXN:"#E3F2FD",USD:"#E8F5E9",EUR:"#F3E5F5"}[mon]||"#F8FAFC";
                       return (
-                        <div key={mon} style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
-                          <span style={{background:monBg,color:monCol,fontWeight:800,fontSize:11,padding:"2px 8px",borderRadius:20}}>{mon}</span>
+                        <div key={mon} style={{display:"grid",gridTemplateColumns:"50px 120px 120px 120px 120px 120px 120px 120px",alignItems:"center",gap:0}}>
+                          <span style={{background:monBg,color:monCol,fontWeight:800,fontSize:11,padding:"2px 8px",borderRadius:20,textAlign:"center"}}>{mon}</span>
                           {[
                             {l:"Monto",           v:`${sym}${fmt(v.monto)}`,          c:C.navy},
                             {l:"Cobrado",         v:`${sym}${fmt(v.cobrado)}`,         c:C.ok},
@@ -1915,9 +1915,9 @@ export default function CxcView({
                             {l:"Disponible",      v:`${sym}${fmt(v.disponible)}`,      c:C.teal},
                             {l:"Disponible Neto", v:`${sym}${fmt(v.disponibleNeto)}`,  c:v.disponibleNeto>=0?C.green:C.danger},
                           ].map(k=>(
-                            <div key={k.l} style={{textAlign:"center",minWidth:100}}>
-                              <div style={{fontSize:10,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:.3}}>{k.l}</div>
-                              <div style={{fontSize:16,fontWeight:800,color:k.c,marginTop:1}}>{k.v}</div>
+                            <div key={k.l} style={{textAlign:"right",padding:"0 8px"}}>
+                              <div style={{fontSize:9,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:.3,whiteSpace:"nowrap"}}>{k.l}</div>
+                              <div style={{fontSize:14,fontWeight:800,color:k.c,marginTop:1,whiteSpace:"nowrap"}}>{k.v}</div>
                             </div>
                           ))}
                         </div>
@@ -1929,7 +1929,7 @@ export default function CxcView({
                 {/* Ingresos expandidos */}
                 {expanded && (
                   <div style={{borderTop:`1px solid ${C.border}`,overflowX:"auto"}}>
-                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:1000}}>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,minWidth:1200}}>
                       <thead>
                         <tr style={{background:"#EEF2FF"}}>
                           <th style={{padding:"8px 6px",width:36,textAlign:"center"}}>
