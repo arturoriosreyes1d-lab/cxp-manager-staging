@@ -9,6 +9,7 @@ import {
   insertCobro, deleteCobro as deleteCobro_DB,
   upsertInvoiceIngreso, deleteInvoiceIngreso as deleteInvoiceIngresoDB,
   upsertCategoriaIngreso, deleteCategoriaIngreso as deleteCategoriaIngresoDB,
+  updateIngresoField,
 } from "./db.js";
 
 /* ── Palette (same as CxpApp) ──────────────────────────────────────────── */
@@ -30,6 +31,7 @@ const iconBtn = { background:"none", border:"none", cursor:"pointer", fontSize:1
 const fmt = n => isNaN(n)||n===""||n===null ? "—" : new Intl.NumberFormat("es-MX",{minimumFractionDigits:2,maximumFractionDigits:2}).format(+n);
 const today = () => new Date().toISOString().split("T")[0];
 const uid = () => Math.random().toString(36).slice(2,10);
+const addDays = (ds, d) => { if(!ds||!d) return ""; const x=new Date(ds+"T12:00:00"); x.setDate(x.getDate()+ +d); return x.toISOString().split("T")[0]; };
 
 const DEFAULT_CATS = ["Circuito","Reprotección","Excursión","Venta Individual","Otro"];
 const CAT_COLORS = {
@@ -111,6 +113,8 @@ export default function CxcView({
   const [importCatDefault, setImportCatDefault] = useState("");
   const [importando, setImportando] = useState(false);
   const importRef = useRef();
+  const [selectedIngresos, setSelectedIngresos] = useState(new Set());
+  const [bulkFechaModal, setBulkFechaModal] = useState(false);
 
   /* ── Derived data ──────────────────────────────────────────── */
   const allInvoices = useMemo(() => [
@@ -429,8 +433,18 @@ export default function CxcView({
       tipoCambio: modalIngreso.tipoCambio || 1,
       fecha: modalIngreso.fecha || today(),
       notas: modalIngreso.notas || "",
+      diasCredito: modalIngreso.diasCredito || 30,
+      fechaVencimiento: modalIngreso.fechaVencimiento || "",
+      fechaFicticia: modalIngreso.fechaFicticia || "",
     });
-    const set = (k,v) => setForm(f=>({...f,[k]:v}));
+    const set = (k,v) => setForm(f=>{
+      const u = {...f,[k]:v};
+      // Auto-calc fechaVencimiento when fecha or diasCredito changes
+      if(k==="fecha"||k==="diasCredito") {
+        u.fechaVencimiento = addDays(k==="fecha"?v:f.fecha, k==="diasCredito"?v:f.diasCredito);
+      }
+      return u;
+    });
     const needsTC = form.moneda !== "MXN";
 
     return (
@@ -467,6 +481,17 @@ export default function CxcView({
               <div style={{fontSize:11,color:C.muted,marginTop:4}}>1 {form.moneda} = {form.tipoCambio} MXN. Se usa para convertir facturas MXN vinculadas.</div>
             </Field>
           )}
+          <Field label="Días de Crédito">
+            <input type="number" value={form.diasCredito} onChange={e=>set("diasCredito",e.target.value)} placeholder="30" style={inputStyle} min="0"/>
+          </Field>
+          <Field label="Fecha Vencimiento">
+            <input type="date" value={form.fechaVencimiento} onChange={e=>set("fechaVencimiento",e.target.value)} style={{...inputStyle,background:"#F0F4FF"}}/>
+            <div style={{fontSize:11,color:C.muted,marginTop:4}}>Calculada automáticamente (fecha + días crédito)</div>
+          </Field>
+          <Field label="Fecha Ficticia de Cobro">
+            <input type="date" value={form.fechaFicticia} onChange={e=>set("fechaFicticia",e.target.value)} style={inputStyle}/>
+            <div style={{fontSize:11,color:C.muted,marginTop:4}}>Opcional. Sobrescribe el vencimiento en la proyección.</div>
+          </Field>
         </div>
         <Field label="Notas">
           <textarea value={form.notas} onChange={e=>set("notas",e.target.value)} rows={2} style={{...inputStyle,resize:"vertical"}} placeholder="Observaciones…"/>
@@ -1029,45 +1054,59 @@ export default function CxcView({
     const disponPct = ing.monto > 0 ? Math.max(0,Math.min(100,(m.disponible||0)/ing.monto*100)) : 0;
     const cobradoPct = ing.monto > 0 ? Math.min(100,(m.totalCobrado||0)/ing.monto*100) : 0;
     const disponColor = (m.disponible||0) > 0 ? C.teal : (m.disponible||0) === 0 ? C.muted : C.danger;
+    const isSelected = selectedIngresos.has(ing.id);
+    // Fecha efectiva para proyección
+    const fechaEfectiva = ing.fechaFicticia || ing.fechaVencimiento || "";
+    const hoy = today();
+    const venceProx = fechaEfectiva && fechaEfectiva < hoy;
 
     return (
-      <tr style={{borderTop:`1px solid ${C.border}`,background:idx%2===0?C.surface:"#FAFBFC",cursor:"pointer",transition:"background .12s"}}
-        onMouseEnter={e=>{e.currentTarget.style.background="#F0F7FF";}}
-        onMouseLeave={e=>{e.currentTarget.style.background=idx%2===0?C.surface:"#FAFBFC";}}
+      <tr style={{borderTop:`1px solid ${C.border}`,background:isSelected?"#E8F0FE":idx%2===0?C.surface:"#FAFBFC",cursor:"pointer",transition:"background .12s"}}
+        onMouseEnter={e=>{if(!isSelected)e.currentTarget.style.background="#F0F7FF";}}
+        onMouseLeave={e=>{if(!isSelected)e.currentTarget.style.background=isSelected?"#E8F0FE":idx%2===0?C.surface:"#FAFBFC";}}
         onClick={()=>setDetailIngreso(ing.id)}>
+        {/* Checkbox */}
+        <td style={{padding:"12px 6px",textAlign:"center"}} onClick={e=>e.stopPropagation()}>
+          <input type="checkbox" checked={isSelected} onChange={()=>{
+            setSelectedIngresos(prev=>{const n=new Set(prev);if(n.has(ing.id))n.delete(ing.id);else n.add(ing.id);return n;});
+          }} style={{cursor:"pointer",width:15,height:15,accentColor:C.blue}}/>
+        </td>
         <td style={{padding:"12px 10px",fontWeight:700,color:C.navy,maxWidth:130,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ing.cliente}</td>
         <td style={{padding:"12px 10px",color:ing.concepto?C.text:C.muted,fontStyle:ing.concepto?"normal":"italic",minWidth:160,maxWidth:220,whiteSpace:"normal",lineHeight:1.4,wordBreak:"break-word"}}>{ing.concepto||"—"}</td>
         <td style={{padding:"12px 10px"}}>
           <span style={{background:catStyle.bg,color:catStyle.text,border:`1px solid ${catStyle.border}`,padding:"2px 9px",borderRadius:20,fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>{ing.categoria}</span>
         </td>
         <td style={{padding:"12px 10px",whiteSpace:"nowrap",fontSize:12,color:C.muted}}>{ing.fecha||"—"}</td>
+        {/* Vencimiento */}
+        <td style={{padding:"12px 10px",whiteSpace:"nowrap",fontSize:12,color:ing.fechaVencimiento?(venceProx?C.danger:C.text):C.muted,fontWeight:ing.fechaVencimiento?600:400}}>
+          {ing.fechaVencimiento||"—"}
+        </td>
+        {/* Fecha ficticia */}
+        <td style={{padding:"12px 8px",whiteSpace:"nowrap"}} onClick={e=>e.stopPropagation()}>
+          <input type="date" value={ing.fechaFicticia||""} onChange={e=>{
+            const val = e.target.value;
+            setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,fechaFicticia:val}:i));
+            updateIngresoField(ing.id,{fechaFicticia:val});
+          }} style={{...inputStyle,padding:"3px 6px",fontSize:11,width:130,border:`1px solid ${ing.fechaFicticia?"#7B1FA2":C.border}`,color:ing.fechaFicticia?"#7B1FA2":C.text}}
+          title="Fecha ficticia de cobro (usada en proyección)"/>
+        </td>
         <td style={{padding:"12px 10px",fontWeight:700,textAlign:"right"}}>{sym}{fmt(ing.monto)}</td>
         <td style={{padding:"12px 10px",fontWeight:600,color:C.ok,textAlign:"right"}}>{sym}{fmt(m.totalCobrado||0)}</td>
         <td style={{padding:"12px 10px",fontWeight:600,color:(m.porCobrar||0)>0?C.warn:C.ok,textAlign:"right"}}>{sym}{fmt(m.porCobrar||0)}</td>
         <td style={{padding:"12px 10px",fontWeight:600,color:C.danger,textAlign:"right"}}>{sym}{fmt(m.consumido||0)}</td>
-        {/* Por Pagar — facturas pendientes vinculadas */}
         <td style={{padding:"12px 10px",textAlign:"right"}}>
           <span style={{fontWeight:700,color:"#E65100",background:(m.porPagar||0)>0?"#FFF3E0":"transparent",padding:(m.porPagar||0)>0?"2px 6px":"0",borderRadius:6}}>
             {sym}{fmt(m.porPagar||0)}
           </span>
         </td>
-        {/* Disponible */}
         <td style={{padding:"12px 10px",textAlign:"right"}}>
           <span style={{fontWeight:800,color:disponColor}}>{sym}{fmt(m.disponible||0)}</span>
           {ing.moneda !== "MXN" && <div style={{fontSize:9,color:C.muted}}>TC:{fmt(ing.tipoCambio)}</div>}
         </td>
-        {/* Disponible Neto */}
         <td style={{padding:"12px 10px",textAlign:"right"}}>
           <span style={{fontWeight:800,color:(m.disponibleNeto||0)>=0?C.green:C.danger,background:(m.disponibleNeto||0)>=0?"#E8F5E9":"#FFEBEE",padding:"2px 7px",borderRadius:6}}>
             {sym}{fmt(m.disponibleNeto||0)}
           </span>
-        </td>
-        <td style={{padding:"12px 10px"}}>
-          {/* Mini bar showing cobrado/consumido */}
-          <div style={{width:80,height:8,borderRadius:20,background:"#E2E8F0",overflow:"hidden",position:"relative"}}>
-            <div style={{position:"absolute",left:0,top:0,height:"100%",width:`${cobradoPct}%`,background:`${C.ok}88`,borderRadius:20}}/>
-            <div style={{position:"absolute",left:0,top:0,height:"100%",width:`${Math.min(cobradoPct,disponPct*0+((m.consumido||0)/ing.monto*100))}%`,background:C.danger,borderRadius:20}}/>
-          </div>
         </td>
         <td style={{padding:"12px 8px",whiteSpace:"nowrap"}} onClick={e=>e.stopPropagation()}>
           <button onClick={()=>setDetailIngreso(ing.id)} style={{...iconBtn,color:C.sky}} title="Ver detalle">🔍</button>
@@ -1087,17 +1126,33 @@ export default function CxcView({
     const MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
     const DIAS  = ["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"];
 
-    // Build map: "YYYY-MM-DD" → [ { ing, cobro } ]
+    // Build map: "YYYY-MM-DD" → [ { ing, cobro?, tipo } ]
     const calMap = useMemo(() => {
       const map = {};
+      // 1. Cobros proyectados manuales (prioridad)
       cobros.filter(c => c.tipo === 'proyectado' && c.fechaCobro).forEach(c => {
         const ing = ingresos.find(i => i.id === c.ingresoId);
         if (!ing) return;
         if (!map[c.fechaCobro]) map[c.fechaCobro] = [];
-        map[c.fechaCobro].push({ ing, cobro: c });
+        map[c.fechaCobro].push({ ing, cobro: c, tipo: 'proyectado' });
+      });
+      // 2. Ingresos con fecha ficticia o vencimiento (sin cobros proyectados)
+      ingresos.forEach(ing => {
+        const tieneCobrosProy = cobros.some(c => c.ingresoId === ing.id && c.tipo === 'proyectado');
+        if (tieneCobrosProy) return; // ya está cubierto arriba
+        const fecha = ing.fechaFicticia || ing.fechaVencimiento;
+        if (!fecha) return;
+        const porCobrar = (metrics[ing.id]?.porCobrar || 0);
+        if (porCobrar <= 0) return; // ya cobrado
+        if (!map[fecha]) map[fecha] = [];
+        map[fecha].push({
+          ing,
+          cobro: { monto: porCobrar, notas: ing.fechaFicticia ? "Fecha ficticia" : "Vencimiento" },
+          tipo: ing.fechaFicticia ? 'ficticia' : 'vencimiento',
+        });
       });
       return map;
-    }, [cobros, ingresos]);
+    }, [cobros, ingresos, metrics]);
 
     const firstDay    = new Date(calYear, calMonth, 1).getDay();
     const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
@@ -1157,26 +1212,31 @@ export default function CxcView({
               const hasCobros = entries.length > 0;
               const byMon = {};
               entries.forEach(({ing,cobro})=>{ byMon[ing.moneda]=(byMon[ing.moneda]||0)+cobro.monto; });
+              // Color by dominant type
+              const tipos = entries.map(e=>e.tipo);
+              const bgCell = !hasCobros ? (isToday?"#E8F0FE":C.surface) :
+                tipos.includes('proyectado') ? "#F3E5F5" :
+                tipos.includes('ficticia')   ? "#E8F5E9" : "#FFF3E0";
+              const textCol = !hasCobros ? C.text :
+                tipos.includes('proyectado') ? "#7B1FA2" :
+                tipos.includes('ficticia')   ? "#2E7D32" : "#E65100";
 
               return (
                 <div key={day}
                   onClick={hasCobros ? ()=>setCalDayDetailLocal({fecha:dateStr,entries}) : undefined}
-                  style={{minHeight:110,padding:"8px 8px 6px",borderRight:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`,background:hasCobros?"#F3E5F5":isToday?"#E8F0FE":C.surface,cursor:hasCobros?"pointer":"default",transition:"background .15s"}}
-                  onMouseEnter={e=>{if(hasCobros)e.currentTarget.style.background="#EDD5F5";}}
-                  onMouseLeave={e=>{if(hasCobros)e.currentTarget.style.background="#F3E5F5";}}>
-                  {/* Número del día */}
-                  <div style={{width:28,height:28,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",background:isToday?C.navy:"transparent",color:isToday?"#fff":hasCobros?"#7B1FA2":C.text,fontWeight:isToday||hasCobros?800:400,fontSize:14,marginBottom:6}}>{day}</div>
-                  {/* Chips de monto por moneda */}
+                  style={{minHeight:110,padding:"8px 8px 6px",borderRight:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`,background:bgCell,cursor:hasCobros?"pointer":"default",transition:"background .15s"}}
+                  onMouseEnter={e=>{if(hasCobros)e.currentTarget.style.opacity=".85";}}
+                  onMouseLeave={e=>{if(hasCobros)e.currentTarget.style.opacity="1";}}>
+                  <div style={{width:28,height:28,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",background:isToday?C.navy:"transparent",color:isToday?"#fff":hasCobros?textCol:C.text,fontWeight:isToday||hasCobros?800:400,fontSize:14,marginBottom:6}}>{day}</div>
                   {Object.entries(byMon).map(([mon,val])=>(
                     <div key={mon} style={{background:{MXN:C.mxn,USD:C.usd,EUR:C.eur}[mon]||"#7B1FA2",color:"#fff",borderRadius:7,padding:"4px 7px",fontSize:13,fontWeight:800,marginBottom:4,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",letterSpacing:"-0.3px"}}>
                       {mon==="EUR"?"€":"$"}{fmt(val)}
                       <span style={{fontSize:10,fontWeight:600,opacity:.85,marginLeft:3}}>{mon}</span>
                     </div>
                   ))}
-                  {/* Conteo de cobros */}
                   {hasCobros && (
-                    <div style={{fontSize:11,color:"#7B1FA2",fontWeight:700,marginTop:2}}>
-                      {entries.length} cobro{entries.length>1?"s":""}
+                    <div style={{fontSize:10,color:textCol,fontWeight:700,marginTop:2}}>
+                      {tipos.includes('proyectado')?"📆 Proyectado":tipos.includes('ficticia')?"📅 Ficticia":"⏰ Vencimiento"}
                     </div>
                   )}
                 </div>
@@ -1186,7 +1246,9 @@ export default function CxcView({
         </div>
 
         <div style={{display:"flex",gap:16,marginTop:12,fontSize:11,color:C.muted,flexWrap:"wrap"}}>
-          <span style={{display:"flex",alignItems:"center",gap:5}}><span style={{width:14,height:14,borderRadius:3,background:"#F3E5F5",border:"1px solid #CE93D8",display:"inline-block"}}/>Día con cobro proyectado — clic para ver detalle</span>
+          <span style={{display:"flex",alignItems:"center",gap:5}}><span style={{width:14,height:14,borderRadius:3,background:"#F3E5F5",border:"1px solid #CE93D8",display:"inline-block"}}/>📆 Cobro proyectado manual</span>
+          <span style={{display:"flex",alignItems:"center",gap:5}}><span style={{width:14,height:14,borderRadius:3,background:"#E8F5E9",border:"1px solid #A5D6A7",display:"inline-block"}}/>📅 Fecha ficticia de cobro</span>
+          <span style={{display:"flex",alignItems:"center",gap:5}}><span style={{width:14,height:14,borderRadius:3,background:"#FFF3E0",border:"1px solid #FFCC80",display:"inline-block"}}/>⏰ Fecha de vencimiento</span>
           <span style={{display:"flex",alignItems:"center",gap:5}}><span style={{width:14,height:14,borderRadius:"50%",background:C.navy,display:"inline-block"}}/>Hoy</span>
         </div>
 
@@ -1451,6 +1513,19 @@ export default function CxcView({
         </div>
       </div>
 
+      {/* Bulk toolbar */}
+      {selectedIngresos.size > 0 && (
+        <div style={{display:"flex",alignItems:"center",gap:12,padding:"10px 16px",background:"#E8F0FE",border:`1px solid ${C.blue}`,borderRadius:10,marginBottom:12}}>
+          <span style={{fontWeight:700,color:C.blue,fontSize:13}}>{selectedIngresos.size} ingreso{selectedIngresos.size!==1?"s":""} seleccionado{selectedIngresos.size!==1?"s":""}</span>
+          <button onClick={()=>setBulkFechaModal(true)} style={{...btnStyle,background:"#7B1FA2",padding:"6px 14px",fontSize:12}}>
+            📅 Asignar Fecha Ficticia Masiva
+          </button>
+          <button onClick={()=>setSelectedIngresos(new Set())} style={{...btnStyle,background:"#F1F5F9",color:C.text,padding:"6px 12px",fontSize:12}}>
+            ✕ Deseleccionar
+          </button>
+        </div>
+      )}
+
       {/* Ingresos — vista condicional */}
       {filtered.length === 0 ? (
         <div style={{textAlign:"center",padding:60,color:C.muted,background:C.surface,borderRadius:14,border:`1px solid ${C.border}`}}>
@@ -1590,10 +1665,18 @@ export default function CxcView({
         /* ── VISTA PLANA POR INGRESO (original) ── */
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,overflow:"hidden"}}>
           <div style={{overflowX:"auto"}}>
-            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,minWidth:900}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,minWidth:1100}}>
               <thead>
                 <tr style={{background:C.navy}}>
-                  {["Cliente","Concepto","Categoría","Fecha","Monto","Cobrado","Por Cobrar","Consumido","Por Pagar","Disponible","Disp. Neto","Consumo","Acciones"].map(h=>(
+                  <th style={{padding:"10px 6px",textAlign:"center",width:36}}>
+                    <input type="checkbox" style={{cursor:"pointer",accentColor:"#fff"}}
+                      checked={selectedIngresos.size===filtered.length && filtered.length>0}
+                      onChange={()=>{
+                        if(selectedIngresos.size===filtered.length) setSelectedIngresos(new Set());
+                        else setSelectedIngresos(new Set(filtered.map(i=>i.id)));
+                      }}/>
+                  </th>
+                  {["Cliente","Concepto","Categoría","Fecha","Vencimiento","Fecha Ficticia","Monto","Cobrado","Por Cobrar","Consumido","Por Pagar","Disponible","Disp. Neto","Acciones"].map(h=>(
                     <th key={h} style={{padding:"10px 10px",textAlign:["Monto","Cobrado","Por Cobrar","Consumido","Por Pagar","Disponible","Disp. Neto"].includes(h)?"right":"left",color:"#fff",fontWeight:600,fontSize:11,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
                   ))}
                 </tr>
@@ -1601,19 +1684,6 @@ export default function CxcView({
               <tbody>
                 {filtered.map((ing,idx)=><IngresoRow key={ing.id} ing={ing} idx={idx}/>)}
               </tbody>
-              <tfoot>
-                <tr style={{borderTop:`2px solid ${C.navy}`,background:"#EEF2FF"}}>
-                  <td colSpan={4} style={{padding:"10px 10px",fontWeight:800,color:C.navy,fontSize:13}}>
-                    TOTAL FILTRADO ({filtered.length})
-                  </td>
-                  <td style={{padding:"10px 10px",fontWeight:800,textAlign:"right",fontSize:12,color:C.muted}}>—</td>
-                  <td style={{padding:"10px 10px",fontWeight:800,color:C.ok,textAlign:"right",fontSize:12}}>—</td>
-                  <td style={{padding:"10px 10px",fontWeight:800,color:C.warn,textAlign:"right",fontSize:12}}>—</td>
-                  <td style={{padding:"10px 10px",fontWeight:800,color:C.danger,textAlign:"right",fontSize:12}}>—</td>
-                  <td style={{padding:"10px 10px",fontWeight:800,color:"#E65100",textAlign:"right",fontSize:12}}>—</td>
-                  <td colSpan={4}/>
-                </tr>
-              </tfoot>
             </table>
           </div>
         </div>
@@ -1786,6 +1856,49 @@ export default function CxcView({
               </div>
             </div>
           )}
+        </ModalShell>
+      )}
+      {/* Bulk Fecha Ficticia Modal */}
+      {bulkFechaModal && (
+        <ModalShell title="📅 Asignar Fecha Ficticia Masiva" onClose={()=>setBulkFechaModal(false)}>
+          {(() => {
+            const [bulkFecha, setBulkFecha] = useState("");
+            const [saving, setSaving] = useState(false);
+            const selectedList = filtered.filter(i=>selectedIngresos.has(i.id));
+            const handleSave = async () => {
+              setSaving(true);
+              for (const ing of selectedList) {
+                await updateIngresoField(ing.id, { fechaFicticia: bulkFecha });
+                setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,fechaFicticia:bulkFecha}:i));
+              }
+              setSelectedIngresos(new Set());
+              setBulkFechaModal(false);
+              setSaving(false);
+            };
+            return (
+              <div>
+                <div style={{background:"#F8FAFC",border:`1px solid ${C.border}`,borderRadius:10,padding:14,marginBottom:16}}>
+                  <div style={{fontSize:13,color:C.muted,marginBottom:4}}>Se asignará a <b style={{color:C.navy}}>{selectedList.length} ingresos</b>:</div>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:6,maxHeight:120,overflowY:"auto"}}>
+                    {selectedList.map(i=>(
+                      <span key={i.id} style={{background:"#E8F0FE",color:C.blue,padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:600}}>{i.cliente} — {i.concepto||i.categoria}</span>
+                    ))}
+                  </div>
+                </div>
+                <div style={{marginBottom:20}}>
+                  <label style={{display:"block",fontSize:12,fontWeight:700,color:C.muted,textTransform:"uppercase",letterSpacing:.5,marginBottom:6}}>Fecha Ficticia de Cobro</label>
+                  <input type="date" value={bulkFecha} onChange={e=>setBulkFecha(e.target.value)} style={{...inputStyle,fontSize:15}}/>
+                  <div style={{fontSize:11,color:C.muted,marginTop:6}}>Esta fecha se usará en la proyección. Si está vacía, se limpiará la fecha ficticia y se usará el vencimiento.</div>
+                </div>
+                <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+                  <button onClick={()=>setBulkFechaModal(false)} style={{...btnStyle,background:"#F1F5F9",color:C.text}}>Cancelar</button>
+                  <button onClick={handleSave} disabled={saving} style={{...btnStyle,background:"#7B1FA2",opacity:saving?.6:1}}>
+                    {saving?"Guardando…":`✅ Aplicar a ${selectedList.length} ingresos`}
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
         </ModalShell>
       )}
     </div>

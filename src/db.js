@@ -281,6 +281,9 @@ const ingresoToApp = (r) => ({
   fecha: r.fecha || '',
   notas: r.notas || '',
   empresaId: r.empresa_id || null,
+  diasCredito: +r.dias_credito || 30,
+  fechaVencimiento: r.fecha_vencimiento || '',
+  fechaFicticia: r.fecha_ficticia || '',
 });
 
 const ingresoToDB = (i) => ({
@@ -294,6 +297,9 @@ const ingresoToDB = (i) => ({
   fecha: i.fecha || null,
   notas: i.notas || '',
   empresa_id: i.empresaId || null,
+  dias_credito: i.diasCredito || 30,
+  fecha_vencimiento: i.fechaVencimiento || null,
+  fecha_ficticia: i.fechaFicticia || null,
 });
 
 /* ── Ingresos ────────────────────────────────────────────────── */
@@ -323,6 +329,17 @@ export async function upsertIngreso(ing) {
 export async function deleteIngreso(id) {
   const { error } = await supabase.from('ingresos').delete().eq('id', id);
   if (error) console.error('deleteIngreso:', error);
+}
+
+export async function updateIngresoField(id, fields) {
+  const dbFields = {};
+  if ('fechaFicticia' in fields) dbFields.fecha_ficticia = fields.fechaFicticia || null;
+  if ('diasCredito' in fields) dbFields.dias_credito = fields.diasCredito;
+  if ('fechaVencimiento' in fields) dbFields.fecha_vencimiento = fields.fechaVencimiento || null;
+  if ('concepto' in fields) dbFields.concepto = fields.concepto;
+  if ('categoria' in fields) dbFields.categoria = fields.categoria;
+  const { error } = await supabase.from('ingresos').update(dbFields).eq('id', id);
+  if (error) console.error('updateIngresoField:', error);
 }
 
 /* ── Cobros ──────────────────────────────────────────────────── */
