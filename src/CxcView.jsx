@@ -269,6 +269,30 @@ export default function CxcView({
     });
   }, [ingresos, filtroSearch, filtroCliente, filtroCategoria, filtroMoneda, filtroFechaFrom, filtroFechaTo, filtroCobro, filtroMesContable, filtroSegmento, metrics]);
 
+  /* KPIs filtrados — reflejan búsqueda/filtros activos */
+  const kpisFiltered = useMemo(() => {
+    const byMon = {
+      MXN:{monto:0,cobrado:0,porCobrar:0,consumido:0,porPagar:0,disponible:0,disponibleNeto:0},
+      USD:{monto:0,cobrado:0,porCobrar:0,consumido:0,porPagar:0,disponible:0,disponibleNeto:0},
+      EUR:{monto:0,cobrado:0,porCobrar:0,consumido:0,porPagar:0,disponible:0,disponibleNeto:0},
+    };
+    // Use filtered if any filter is active, otherwise use all ingresos (kpis)
+    const hayFiltro = filtroSearch||filtroCliente||filtroCategoria||filtroMoneda||filtroFechaFrom||filtroFechaTo||filtroCobro||filtroMesContable||filtroSegmento;
+    const source = hayFiltro ? filtered : ingresos;
+    source.forEach(ing => {
+      const m = metrics[ing.id] || {};
+      const k = byMon[ing.moneda] || byMon.MXN;
+      k.monto         += ing.monto;
+      k.cobrado       += m.totalCobrado||0;
+      k.porCobrar     += m.porCobrar||0;
+      k.consumido     += m.consumido||0;
+      k.porPagar      += m.porPagar||0;
+      k.disponible    += m.disponible||0;
+      k.disponibleNeto+= m.disponibleNeto||0;
+    });
+    return byMon;
+  }, [filtered, ingresos, metrics, filtroSearch, filtroCliente, filtroCategoria, filtroMoneda, filtroFechaFrom, filtroFechaTo, filtroCobro, filtroMesContable, filtroSegmento]);
+
   /* Agrupado por cliente */
   const groupedByCliente = useMemo(() => {
     const map = {};
@@ -1615,8 +1639,13 @@ export default function CxcView({
       <input ref={tasImportRef} type="file" accept=".xlsx,.xls" onChange={handleTasImport} style={{display:"none"}}/>
 
       {/* KPI Cards — per currency */}
+      {(filtroSearch||filtroCliente||filtroCategoria||filtroMoneda||filtroFechaFrom||filtroFechaTo||filtroCobro||filtroMesContable||filtroSegmento) && (
+        <div style={{background:"#E8F0FE",border:`1px solid ${C.blue}`,borderRadius:8,padding:"6px 14px",marginBottom:8,fontSize:12,color:C.blue,fontWeight:600}}>
+          🔍 Mostrando totales de <b>{filtered.length}</b> ingreso{filtered.length!==1?"s":""} filtrados
+        </div>
+      )}
       <div style={{display:"flex",gap:12,flexWrap:"wrap",margin:"20px 0"}}>
-        {Object.entries(kpis).map(([mon,v])=>{
+        {Object.entries(kpisFiltered).map(([mon,v])=>{
           if (v.monto === 0 && v.cobrado === 0) return null;
           const sym = monedaSym(mon);
           const flagMap = {MXN:"🇲🇽",USD:"🇺🇸",EUR:"🇪🇺"};
@@ -1655,7 +1684,7 @@ export default function CxcView({
         const sym = monedaSym(moneda);
 
         // Filtra los ingresos de esa moneda según el tipo de KPI
-        const rows = ingresos.filter(ing => ing.moneda === moneda).map(ing => {
+        const rows = filtered.filter(ing => ing.moneda === moneda).map(ing => {
           const m = metrics[ing.id] || {};
           let valor = 0;
           if (tipo === "total")          valor = ing.monto;
