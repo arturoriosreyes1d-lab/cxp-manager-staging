@@ -603,8 +603,9 @@ export default function CxcView({
 
           newRows.push({
             id: Math.random().toString(36).slice(2,10),
-            cliente, concepto: concepto||folio, folio, categoria: segmento||"",
-            segmento, monto, moneda, tipoCambio:1, fecha, notas:uuid,
+            cliente, concepto: concepto||folio, folio,
+            categoria: segmento||"", segmento,
+            monto, moneda, tipoCambio:1, fecha, notas:uuid,
             fechaVencimiento, fechaContable, diasCredito:0, fechaFicticia:"",
             empresaId,
           });
@@ -1915,8 +1916,8 @@ export default function CxcView({
                                 });
                               }}/>
                           </th>
-                          {["Seg.","Concepto","Categoría","F. Contable","Fecha","Vencimiento","Vencidos","Por Vencer","F. Ficticia","Monto","Cobrado","Por Cobrar","Consumido","Por Pagar","Disponible","D. Neto","Acciones"].map(h=>(
-                            <th key={h} style={{padding:"8px 8px",textAlign:["Monto","Cobrado","Por Cobrar","Consumido","Por Pagar","Disponible","D. Neto"].includes(h)?"right":["Vencidos","Por Vencer"].includes(h)?"center":"left",color:C.blue,fontWeight:700,fontSize:10,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
+                          {["Segmento","Folio Factura","Concepto","Fecha Contable","Fecha Factura","Vencimiento","Días Vencidos","Por Vencer","Fecha Ficticia","Monto","Cobrado","Por Cobrar","Consumido","Por Pagar","Disponible","D. Neto","Acciones"].map(h=>(
+                            <th key={h} style={{padding:"8px 8px",textAlign:["Monto","Cobrado","Por Cobrar","Consumido","Por Pagar","Disponible","D. Neto"].includes(h)?"right":["Días Vencidos","Por Vencer"].includes(h)?"center":"left",color:C.blue,fontWeight:700,fontSize:10,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
                           ))}
                         </tr>
                       </thead>
@@ -1924,7 +1925,6 @@ export default function CxcView({
                         {ings.map((ing,idx) => {
                           const m = metrics[ing.id]||{};
                           const sym = monedaSym(ing.moneda);
-                          const catStyle = getCatStyle(ing.categoria);
                           const disponColor = (m.disponible||0)>0?C.teal:(m.disponible||0)===0?C.muted:C.danger;
                           const isSelected = selectedIngresos.has(ing.id);
                           const hoy = today();
@@ -1944,10 +1944,10 @@ export default function CxcView({
                               <td style={{padding:"8px 6px"}} onClick={e=>e.stopPropagation()}>
                                 <input value={ing.segmento||""} onChange={e=>{const v=e.target.value;setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,segmento:v}:i));updateIngresoField(ing.id,{segmento:v});}} placeholder="—" style={{padding:"2px 5px",fontSize:10,border:`1px solid ${C.border}`,borderRadius:5,width:55,fontFamily:"inherit"}}/>
                               </td>
+                              {/* Folio */}
+                              <td style={{padding:"9px 8px",fontSize:11,color:C.blue,fontWeight:600,whiteSpace:"nowrap"}}>{ing.folio||"—"}</td>
+                              {/* Concepto */}
                               <td style={{padding:"9px 8px",color:ing.concepto?C.text:C.muted,fontStyle:ing.concepto?"normal":"italic",minWidth:120}}>{ing.concepto||"—"}</td>
-                              <td style={{padding:"9px 8px"}}>
-                                <span style={{background:catStyle.bg,color:catStyle.text,border:`1px solid ${catStyle.border}`,padding:"2px 7px",borderRadius:20,fontSize:10,fontWeight:700,whiteSpace:"nowrap"}}>{ing.categoria||"—"}</span>
-                              </td>
                               {/* Fecha Contable */}
                               <td style={{padding:"8px 6px"}} onClick={e=>e.stopPropagation()}>
                                 <input type="date" value={ing.fechaContable||""} onChange={e=>{const v=e.target.value;setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,fechaContable:v}:i));updateIngresoField(ing.id,{fechaContable:v});}} style={{padding:"2px 5px",fontSize:10,border:`1px solid ${ing.fechaContable?C.teal:C.border}`,borderRadius:5,color:ing.fechaContable?C.teal:C.text,width:112,fontFamily:"inherit"}}/>
