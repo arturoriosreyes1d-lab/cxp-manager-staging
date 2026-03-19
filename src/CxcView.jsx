@@ -120,6 +120,8 @@ export default function CxcView({
   const [selectedIngresos, setSelectedIngresos] = useState(new Set());
   const [bulkFechaModal, setBulkFechaModal] = useState(false);
   const [cobroMasivoModal, setCobroMasivoModal] = useState(false);
+  const [sortCol, setSortCol] = useState("fecha");
+  const [sortDir, setSortDir] = useState("desc");
   const [tasModal, setTasModal] = useState(false);
   const [tasPreview, setTasPreview] = useState(null); // {rows, dupes}
   const [tasCatDefault, setTasCatDefault] = useState("");
@@ -274,9 +276,82 @@ export default function CxcView({
       if (!map[ing.cliente]) map[ing.cliente] = [];
       map[ing.cliente].push(ing);
     });
-    // Sort clients alphabetically
     return Object.entries(map).sort((a,b) => a[0].localeCompare(b[0]));
   }, [filtered]);
+
+  /* Sorted filtered list */
+  const sortedFiltered = useMemo(() => {
+    const getVal = (ing, col) => {
+      const m = metrics[ing.id] || {};
+      switch(col) {
+        case 'cliente':        return ing.cliente||"";
+        case 'folio':          return ing.folio||"";
+        case 'segmento':       return ing.segmento||"";
+        case 'fechaContable':  return ing.fechaContable||"";
+        case 'fecha':          return ing.fecha||"";
+        case 'fechaVencimiento': return ing.fechaVencimiento||"";
+        case 'fechaFicticia':  return ing.fechaFicticia||"";
+        case 'monto':          return ing.monto||0;
+        case 'cobrado':        return m.totalCobrado||0;
+        case 'porCobrar':      return m.porCobrar||0;
+        case 'consumido':      return m.consumido||0;
+        case 'porPagar':       return m.porPagar||0;
+        case 'disponible':     return m.disponible||0;
+        case 'disponibleNeto': return m.disponibleNeto||0;
+        case 'diasVencidos': {
+          const d = diasDiff(ing.fechaVencimiento);
+          return d !== null && d < 0 ? Math.abs(d) : 0;
+        }
+        default: return "";
+      }
+    };
+    return [...filtered].sort((a,b) => {
+      const va = getVal(a, sortCol);
+      const vb = getVal(b, sortCol);
+      let cmp = typeof va === 'number' ? va - vb : String(va).localeCompare(String(vb));
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+  }, [filtered, sortCol, sortDir, metrics]);
+
+  /* Totals of filtered (for footer) */
+  const filteredTotals = useMemo(() => {
+    const t = {};
+    ['MXN','USD','EUR'].forEach(mon => {
+      const rows = filtered.filter(i => i.moneda === mon);
+      if (!rows.length) return;
+      t[mon] = {
+        monto: rows.reduce((s,i) => s + i.monto, 0),
+        cobrado: rows.reduce((s,i) => s + (metrics[i.id]?.totalCobrado||0), 0),
+        porCobrar: rows.reduce((s,i) => s + (metrics[i.id]?.porCobrar||0), 0),
+        consumido: rows.reduce((s,i) => s + (metrics[i.id]?.consumido||0), 0),
+        porPagar: rows.reduce((s,i) => s + (metrics[i.id]?.porPagar||0), 0),
+        disponible: rows.reduce((s,i) => s + (metrics[i.id]?.disponible||0), 0),
+        disponibleNeto: rows.reduce((s,i) => s + (metrics[i.id]?.disponibleNeto||0), 0),
+      };
+    });
+    return t;
+  }, [filtered, metrics]);
+
+  /* Totals of selected */
+  const selectedTotals = useMemo(() => {
+    const t = {};
+    ['MXN','USD','EUR'].forEach(mon => {
+      const rows = filtered.filter(i => i.moneda === mon && selectedIngresos.has(i.id));
+      if (!rows.length) return;
+      t[mon] = {
+        monto: rows.reduce((s,i) => s + i.monto, 0),
+        cobrado: rows.reduce((s,i) => s + (metrics[i.id]?.totalCobrado||0), 0),
+        porCobrar: rows.reduce((s,i) => s + (metrics[i.id]?.porCobrar||0), 0),
+      };
+    });
+    return t;
+  }, [filtered, selectedIngresos, metrics]);
+
+  const handleSort = (col) => {
+    if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortCol(col); setSortDir('asc'); }
+  };
+  const sortIcon = (col) => sortCol === col ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
 
   /* ── CRUD Handlers ─────────────────────────────────────────── */
   const saveIngreso = async (data) => {
@@ -528,7 +603,7 @@ export default function CxcView({
 
           newRows.push({
             id: Math.random().toString(36).slice(2,10),
-            cliente, concepto: concepto||folio, categoria: segmento||"",
+            cliente, concepto: concepto||folio, folio, categoria: segmento||"",
             segmento, monto, moneda, tipoCambio:1, fecha, notas:uuid,
             fechaVencimiento, fechaContable, diasCredito:0, fechaFicticia:"",
             empresaId,
@@ -1211,7 +1286,6 @@ export default function CxcView({
     const m = metrics[ing.id] || {};
     const catStyle = getCatStyle(ing.categoria);
     const sym = monedaSym(ing.moneda);
-    const cobradoPct = ing.monto > 0 ? Math.min(100,(m.totalCobrado||0)/ing.monto*100) : 0;
     const disponColor = (m.disponible||0) > 0 ? C.teal : (m.disponible||0) === 0 ? C.muted : C.danger;
     const isSelected = selectedIngresos.has(ing.id);
     const diffDias = diasDiff(ing.fechaVencimiento);
@@ -1224,85 +1298,87 @@ export default function CxcView({
         onMouseLeave={e=>{if(!isSelected)e.currentTarget.style.background=isSelected?"#E8F0FE":idx%2===0?C.surface:"#FAFBFC";}}
         onClick={()=>setDetailIngreso(ing.id)}>
         {/* Checkbox */}
-        <td style={{padding:"12px 6px",textAlign:"center"}} onClick={e=>e.stopPropagation()}>
+        <td style={{padding:"10px 6px",textAlign:"center"}} onClick={e=>e.stopPropagation()}>
           <input type="checkbox" checked={isSelected} onChange={()=>{
             setSelectedIngresos(prev=>{const n=new Set(prev);if(n.has(ing.id))n.delete(ing.id);else n.add(ing.id);return n;});
           }} style={{cursor:"pointer",width:15,height:15,accentColor:C.blue}}/>
         </td>
         {/* Segmento */}
-        <td style={{padding:"10px 8px"}} onClick={e=>e.stopPropagation()}>
+        <td style={{padding:"8px 8px"}} onClick={e=>e.stopPropagation()}>
           <input value={ing.segmento||""} onChange={e=>{
-            const val=e.target.value;
-            setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,segmento:val}:i));
-            updateIngresoField(ing.id,{segmento:val});
-          }} placeholder="—" style={{padding:"3px 7px",fontSize:11,border:`1px solid ${C.border}`,borderRadius:6,width:70,fontFamily:"inherit",background:"#FAFBFC"}}
-          onClick={e=>e.stopPropagation()}/>
+            const v=e.target.value;
+            setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,segmento:v}:i));
+            updateIngresoField(ing.id,{segmento:v});
+          }} placeholder="—" style={{padding:"3px 7px",fontSize:11,border:`1px solid ${C.border}`,borderRadius:6,width:70,fontFamily:"inherit",background:"#FAFBFC"}}/>
         </td>
-        <td style={{padding:"12px 10px",fontWeight:700,color:C.navy,maxWidth:130,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ing.cliente}</td>
-        <td style={{padding:"12px 10px",color:ing.concepto?C.text:C.muted,fontStyle:ing.concepto?"normal":"italic",minWidth:160,maxWidth:220,whiteSpace:"normal",lineHeight:1.4,wordBreak:"break-word"}}>{ing.concepto||"—"}</td>
-        <td style={{padding:"12px 10px"}}>
-          <span style={{background:catStyle.bg,color:catStyle.text,border:`1px solid ${catStyle.border}`,padding:"2px 9px",borderRadius:20,fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>{ing.categoria}</span>
+        {/* Cliente */}
+        <td style={{padding:"10px 10px",fontWeight:700,color:C.navy,maxWidth:140,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ing.cliente}</td>
+        {/* Folio */}
+        <td style={{padding:"10px 8px",fontSize:11,color:C.blue,fontWeight:600,whiteSpace:"nowrap"}}>{ing.folio||"—"}</td>
+        {/* Concepto */}
+        <td style={{padding:"10px 10px",color:ing.concepto?C.text:C.muted,fontStyle:ing.concepto?"normal":"italic",minWidth:150,maxWidth:200,whiteSpace:"normal",lineHeight:1.4,wordBreak:"break-word",fontSize:12}}>{ing.concepto||"—"}</td>
+        {/* Moneda — fixed width, no wrap */}
+        <td style={{padding:"10px 8px",whiteSpace:"nowrap"}}>
+          <span style={{background:{MXN:"#E3F2FD",USD:"#E8F5E9",EUR:"#F3E5F5"}[ing.moneda]||"#F8FAFC",color:{MXN:C.mxn,USD:C.usd,EUR:C.eur}[ing.moneda]||C.navy,padding:"3px 8px",borderRadius:20,fontSize:11,fontWeight:700,display:"inline-block",minWidth:40,textAlign:"center"}}>
+            {ing.moneda}
+          </span>
         </td>
         {/* Fecha Contable */}
-        <td style={{padding:"10px 8px"}} onClick={e=>e.stopPropagation()}>
+        <td style={{padding:"8px 8px"}} onClick={e=>e.stopPropagation()}>
           <input type="date" value={ing.fechaContable||""} onChange={e=>{
-            const val=e.target.value;
-            setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,fechaContable:val}:i));
-            updateIngresoField(ing.id,{fechaContable:val});
+            const v=e.target.value;
+            setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,fechaContable:v}:i));
+            updateIngresoField(ing.id,{fechaContable:v});
           }} style={{padding:"3px 6px",fontSize:11,border:`1px solid ${ing.fechaContable?C.teal:C.border}`,borderRadius:6,color:ing.fechaContable?C.teal:C.text,width:125,fontFamily:"inherit"}}/>
         </td>
-        <td style={{padding:"12px 10px",whiteSpace:"nowrap",fontSize:12,color:C.muted}}>{ing.fecha||"—"}</td>
+        {/* Fecha Factura */}
+        <td style={{padding:"10px 10px",whiteSpace:"nowrap",fontSize:11,color:C.muted}}>{ing.fecha||"—"}</td>
         {/* Vencimiento */}
-        <td style={{padding:"12px 10px",whiteSpace:"nowrap",fontSize:12,color:venceProx?C.danger:ing.fechaVencimiento?C.text:C.muted,fontWeight:ing.fechaVencimiento?600:400}}>
+        <td style={{padding:"10px 10px",whiteSpace:"nowrap",fontSize:11,color:venceProx?C.danger:ing.fechaVencimiento?C.text:C.muted,fontWeight:ing.fechaVencimiento?600:400}}>
           {ing.fechaVencimiento||"—"}
         </td>
         {/* Días Vencidos */}
-        <td style={{padding:"10px 8px",textAlign:"center"}}>
+        <td style={{padding:"8px 8px",textAlign:"center"}}>
           {diffDias!==null && diffDias<0 ? (
-            <span style={{background:"#FFEBEE",color:C.danger,fontWeight:800,fontSize:12,padding:"3px 8px",borderRadius:20,whiteSpace:"nowrap"}}>
-              {Math.abs(diffDias)}d
-            </span>
+            <span style={{background:"#FFEBEE",color:C.danger,fontWeight:800,fontSize:11,padding:"3px 8px",borderRadius:20,whiteSpace:"nowrap"}}>{Math.abs(diffDias)}d</span>
           ) : <span style={{color:C.muted,fontSize:11}}>—</span>}
         </td>
         {/* Por Vencer */}
-        <td style={{padding:"10px 8px",textAlign:"center"}}>
+        <td style={{padding:"8px 8px",textAlign:"center"}}>
           {diffDias!==null && diffDias>=0 ? (
-            <span style={{background:diffDias<=7?"#FFF3E0":diffDias<=30?"#FFFDE7":"#E8F5E9",color:diffDias<=7?C.danger:diffDias<=30?C.warn:C.ok,fontWeight:800,fontSize:12,padding:"3px 8px",borderRadius:20,whiteSpace:"nowrap"}}>
-              {diffDias}d
-            </span>
+            <span style={{background:diffDias<=7?"#FFF3E0":diffDias<=30?"#FFFDE7":"#E8F5E9",color:diffDias<=7?C.danger:diffDias<=30?C.warn:C.ok,fontWeight:800,fontSize:11,padding:"3px 8px",borderRadius:20,whiteSpace:"nowrap"}}>{diffDias}d</span>
           ) : <span style={{color:C.muted,fontSize:11}}>—</span>}
         </td>
-        {/* Fecha ficticia */}
-        <td style={{padding:"12px 8px",whiteSpace:"nowrap"}} onClick={e=>e.stopPropagation()}>
+        {/* Fecha Ficticia */}
+        <td style={{padding:"8px 8px"}} onClick={e=>e.stopPropagation()}>
           <input type="date" value={ing.fechaFicticia||""} onChange={e=>{
-            const val = e.target.value;
-            setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,fechaFicticia:val}:i));
-            updateIngresoField(ing.id,{fechaFicticia:val});
-          }} style={{...inputStyle,padding:"3px 6px",fontSize:11,width:130,border:`1px solid ${ing.fechaFicticia?"#7B1FA2":C.border}`,color:ing.fechaFicticia?"#7B1FA2":C.text}}/>
+            const v=e.target.value;
+            setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,fechaFicticia:v}:i));
+            updateIngresoField(ing.id,{fechaFicticia:v});
+          }} style={{padding:"3px 6px",fontSize:11,width:125,border:`1px solid ${ing.fechaFicticia?"#7B1FA2":C.border}`,borderRadius:6,color:ing.fechaFicticia?"#7B1FA2":C.text,fontFamily:"inherit"}}/>
         </td>
-        <td style={{padding:"12px 10px",fontWeight:700,textAlign:"right"}}>{sym}{fmt(ing.monto)}</td>
-        <td style={{padding:"12px 10px",fontWeight:600,color:C.ok,textAlign:"right"}}>{sym}{fmt(m.totalCobrado||0)}</td>
-        <td style={{padding:"12px 10px",fontWeight:600,color:(m.porCobrar||0)>0?C.warn:C.ok,textAlign:"right"}}>{sym}{fmt(m.porCobrar||0)}</td>
-        <td style={{padding:"12px 10px",fontWeight:600,color:C.danger,textAlign:"right"}}>{sym}{fmt(m.consumido||0)}</td>
-        <td style={{padding:"12px 10px",textAlign:"right"}}>
+        <td style={{padding:"10px 10px",fontWeight:700,textAlign:"right",whiteSpace:"nowrap"}}>{sym}{fmt(ing.monto)}</td>
+        <td style={{padding:"10px 10px",fontWeight:600,color:C.ok,textAlign:"right",whiteSpace:"nowrap"}}>{sym}{fmt(m.totalCobrado||0)}</td>
+        <td style={{padding:"10px 10px",fontWeight:600,color:(m.porCobrar||0)>0?C.warn:C.ok,textAlign:"right",whiteSpace:"nowrap"}}>{sym}{fmt(m.porCobrar||0)}</td>
+        <td style={{padding:"10px 10px",fontWeight:600,color:C.danger,textAlign:"right",whiteSpace:"nowrap"}}>{sym}{fmt(m.consumido||0)}</td>
+        <td style={{padding:"10px 10px",textAlign:"right",whiteSpace:"nowrap"}}>
           <span style={{fontWeight:700,color:"#E65100",background:(m.porPagar||0)>0?"#FFF3E0":"transparent",padding:(m.porPagar||0)>0?"2px 6px":"0",borderRadius:6}}>{sym}{fmt(m.porPagar||0)}</span>
         </td>
-        <td style={{padding:"12px 10px",textAlign:"right"}}>
+        <td style={{padding:"10px 10px",textAlign:"right",whiteSpace:"nowrap"}}>
           <span style={{fontWeight:800,color:disponColor}}>{sym}{fmt(m.disponible||0)}</span>
         </td>
-        <td style={{padding:"12px 10px",textAlign:"right"}}>
-          <span style={{fontWeight:800,color:(m.disponibleNeto||0)>=0?C.green:C.danger,background:(m.disponibleNeto||0)>=0?"#E8F5E9":"#FFEBEE",padding:"2px 7px",borderRadius:6}}>
-            {sym}{fmt(m.disponibleNeto||0)}
-          </span>
+        <td style={{padding:"10px 10px",textAlign:"right",whiteSpace:"nowrap"}}>
+          <span style={{fontWeight:800,color:(m.disponibleNeto||0)>=0?C.green:C.danger,background:(m.disponibleNeto||0)>=0?"#E8F5E9":"#FFEBEE",padding:"2px 7px",borderRadius:6}}>{sym}{fmt(m.disponibleNeto||0)}</span>
         </td>
-        <td style={{padding:"12px 8px",whiteSpace:"nowrap"}} onClick={e=>e.stopPropagation()}>
+        <td style={{padding:"10px 8px",whiteSpace:"nowrap"}} onClick={e=>e.stopPropagation()}>
           <button onClick={()=>setDetailIngreso(ing.id)} style={{...iconBtn,color:C.sky}} title="Ver detalle">🔍</button>
           <button onClick={()=>setModalIngreso({...ing})} style={{...iconBtn,color:C.blue}} title="Editar">✏️</button>
-          <button onClick={()=>setDeleteConfirm({id:ing.id,label:`${ing.cliente} — ${ing.concepto||ing.categoria}`})} style={{...iconBtn,color:C.danger}} title="Eliminar">🗑️</button>
+          <button onClick={()=>setDeleteConfirm({id:ing.id,label:`${ing.cliente} — ${ing.folio||ing.concepto||ing.segmento}`})} style={{...iconBtn,color:C.danger}} title="Eliminar">🗑️</button>
         </td>
       </tr>
     );
   };
+
 
 
   /* ── Proyección en Calendario ───────────────────────────────── */
@@ -1722,17 +1798,23 @@ export default function CxcView({
 
       {/* Bulk toolbar */}
       {selectedIngresos.size > 0 && (
-        <div style={{display:"flex",alignItems:"center",gap:12,padding:"10px 16px",background:"#E8F0FE",border:`1px solid ${C.blue}`,borderRadius:10,marginBottom:12}}>
-          <span style={{fontWeight:700,color:C.blue,fontSize:13}}>{selectedIngresos.size} ingreso{selectedIngresos.size!==1?"s":""} seleccionado{selectedIngresos.size!==1?"s":""}</span>
-          <button onClick={()=>setCobroMasivoModal(true)} style={{...btnStyle,background:C.ok,padding:"6px 14px",fontSize:12}}>
-            💰 Cobro Masivo
-          </button>
-          <button onClick={()=>setBulkFechaModal(true)} style={{...btnStyle,background:"#7B1FA2",padding:"6px 14px",fontSize:12}}>
-            📅 Fecha Ficticia Masiva
-          </button>
-          <button onClick={()=>setSelectedIngresos(new Set())} style={{...btnStyle,background:"#F1F5F9",color:C.text,padding:"6px 12px",fontSize:12}}>
-            ✕ Deseleccionar
-          </button>
+        <div style={{background:"#E8F0FE",border:`1px solid ${C.blue}`,borderRadius:10,padding:"10px 16px",marginBottom:12}}>
+          <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+            <span style={{fontWeight:700,color:C.blue,fontSize:13}}>{selectedIngresos.size} ingreso{selectedIngresos.size!==1?"s":""} seleccionado{selectedIngresos.size!==1?"s":""}</span>
+            {Object.entries(selectedTotals).map(([mon,v])=>(
+              <div key={mon} style={{display:"flex",gap:10,fontSize:12,flexWrap:"wrap"}}>
+                <span style={{fontWeight:700,color:{MXN:C.mxn,USD:C.usd,EUR:C.eur}[mon]}}>{mon}:</span>
+                <span style={{color:C.navy,fontWeight:700}}>Total {monedaSym(mon)}{fmt(v.monto)}</span>
+                <span style={{color:C.ok}}>Cobrado {monedaSym(mon)}{fmt(v.cobrado)}</span>
+                <span style={{color:C.warn}}>x Cobrar {monedaSym(mon)}{fmt(v.porCobrar)}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{display:"flex",gap:8,marginTop:8,flexWrap:"wrap"}}>
+            <button onClick={()=>setCobroMasivoModal(true)} style={{...btnStyle,background:C.ok,padding:"6px 14px",fontSize:12}}>💰 Cobro Masivo</button>
+            <button onClick={()=>setBulkFechaModal(true)} style={{...btnStyle,background:"#7B1FA2",padding:"6px 14px",fontSize:12}}>📅 Fecha Ficticia Masiva</button>
+            <button onClick={()=>setSelectedIngresos(new Set())} style={{...btnStyle,background:"#F1F5F9",color:C.text,padding:"6px 12px",fontSize:12}}>✕ Deseleccionar</button>
+          </div>
         </div>
       )}
 
@@ -1924,14 +2006,59 @@ export default function CxcView({
                         else setSelectedIngresos(new Set(filtered.map(i=>i.id)));
                       }}/>
                   </th>
-                  {["Seg.","Cliente","Concepto","Categoría","F. Contable","Fecha","Vencimiento","Vencidos","Por Vencer","F. Ficticia","Monto","Cobrado","Por Cobrar","Consumido","Por Pagar","Disponible","Disp. Neto","Acciones"].map(h=>(
-                    <th key={h} style={{padding:"10px 8px",textAlign:["Monto","Cobrado","Por Cobrar","Consumido","Por Pagar","Disponible","Disp. Neto"].includes(h)?"right":["Vencidos","Por Vencer"].includes(h)?"center":"left",color:"#fff",fontWeight:600,fontSize:10,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
+                  {[
+                    {label:"Segmento",       col:"segmento"},
+                    {label:"Cliente",         col:"cliente"},
+                    {label:"Folio Factura",   col:"folio"},
+                    {label:"Concepto",        col:"concepto"},
+                    {label:"Moneda",          col:"moneda"},
+                    {label:"Fecha Contable",  col:"fechaContable"},
+                    {label:"Fecha Factura",   col:"fecha"},
+                    {label:"Vencimiento",     col:"fechaVencimiento"},
+                    {label:"Días Vencidos",   col:"diasVencidos"},
+                    {label:"Por Vencer",      col:null},
+                    {label:"Fecha Ficticia",  col:"fechaFicticia"},
+                    {label:"Monto",           col:"monto",       right:true},
+                    {label:"Cobrado",         col:"cobrado",     right:true},
+                    {label:"Por Cobrar",      col:"porCobrar",   right:true},
+                    {label:"Consumido",       col:"consumido",   right:true},
+                    {label:"Por Pagar",       col:"porPagar",    right:true},
+                    {label:"Disponible",      col:"disponible",  right:true},
+                    {label:"Disp. Neto",      col:"disponibleNeto", right:true},
+                    {label:"Acciones",        col:null},
+                  ].map(h=>(
+                    <th key={h.label}
+                      onClick={h.col ? ()=>handleSort(h.col) : undefined}
+                      style={{padding:"10px 8px",textAlign:h.right?"right":"left",color:"#fff",fontWeight:600,fontSize:10,textTransform:"uppercase",whiteSpace:"nowrap",cursor:h.col?"pointer":"default",userSelect:"none"}}
+                    >{h.label}{h.col ? sortIcon(h.col) : ""}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((ing,idx)=><IngresoRow key={ing.id} ing={ing} idx={idx}/>)}
+                {sortedFiltered.map((ing,idx)=><IngresoRow key={ing.id} ing={ing} idx={idx}/>)}
               </tbody>
+              {Object.keys(filteredTotals).map(mon => {
+                const v = filteredTotals[mon];
+                const sym = monedaSym(mon);
+                return (
+                  <tfoot key={mon}>
+                    <tr style={{borderTop:`2px solid ${C.navy}`,background:"#EEF2FF"}}>
+                      <td colSpan={4} style={{padding:"8px 10px",fontWeight:800,color:C.navy,fontSize:12}}>
+                        TOTAL {mon} ({filtered.filter(i=>i.moneda===mon).length} registros)
+                      </td>
+                      <td colSpan={7}/>
+                      <td style={{padding:"8px 10px",fontWeight:800,textAlign:"right",color:C.navy,whiteSpace:"nowrap"}}>{sym}{fmt(v.monto)}</td>
+                      <td style={{padding:"8px 10px",fontWeight:800,textAlign:"right",color:C.ok,whiteSpace:"nowrap"}}>{sym}{fmt(v.cobrado)}</td>
+                      <td style={{padding:"8px 10px",fontWeight:800,textAlign:"right",color:C.warn,whiteSpace:"nowrap"}}>{sym}{fmt(v.porCobrar)}</td>
+                      <td style={{padding:"8px 10px",fontWeight:800,textAlign:"right",color:C.danger,whiteSpace:"nowrap"}}>{sym}{fmt(v.consumido)}</td>
+                      <td style={{padding:"8px 10px",fontWeight:800,textAlign:"right",color:"#E65100",whiteSpace:"nowrap"}}>{sym}{fmt(v.porPagar)}</td>
+                      <td style={{padding:"8px 10px",fontWeight:800,textAlign:"right",color:C.teal,whiteSpace:"nowrap"}}>{sym}{fmt(v.disponible)}</td>
+                      <td style={{padding:"8px 10px",fontWeight:800,textAlign:"right",color:v.disponibleNeto>=0?C.green:C.danger,whiteSpace:"nowrap"}}>{sym}{fmt(v.disponibleNeto)}</td>
+                      <td/>
+                    </tr>
+                  </tfoot>
+                );
+              })}
             </table>
           </div>
         </div>
