@@ -787,8 +787,20 @@ export default function CxpApp({ user, onLogout }) {
           })()}
         </td>
         <td style={{padding:"10px 8px",whiteSpace:"nowrap",color:overdue?C.danger:C.text}}>{inv.vencimiento||"—"}</td>
-        <td style={{padding:"10px 8px",color:days<0?C.danger:days<=7?C.warn:C.ok,fontWeight:600}}>
-          {days!==null?(days<0?`${Math.abs(days)}d venc.`:`${days}d`):"—"}
+        <td style={{padding:"10px 8px",whiteSpace:"nowrap"}}>
+          {days===null ? <span style={{color:C.muted}}>—</span> : days >= 0 ? (
+            <span style={{
+              background: days<=7?"#FFF3E0":days<=30?"#FFFDE7":"#E8F5E9",
+              color: days<=7?C.warn:days<=30?"#F57F17":C.ok,
+              fontWeight:700, fontSize:11, padding:"2px 8px", borderRadius:20, whiteSpace:"nowrap"
+            }}>{days}d</span>
+          ) : (
+            <span style={{
+              background: Math.abs(days)<=7?"#FFF5F5":Math.abs(days)<=15?"#FFEBEE":Math.abs(days)<=30?"#FFCDD2":Math.abs(days)<=60?"#EF9A9A":"#E57373",
+              color: Math.abs(days)<=7?"#E57373":Math.abs(days)<=15?C.danger:Math.abs(days)<=30?"#C62828":Math.abs(days)<=60?"#B71C1C":"#7F0000",
+              fontWeight:800, fontSize:11, padding:"2px 8px", borderRadius:20, whiteSpace:"nowrap"
+            }}>{Math.abs(days)}d venc.</span>
+          )}
         </td>
         <td style={{padding:"10px 8px"}}>
           <select value={inv.estatus} onChange={e=>!esConsulta&&updateEstatus(inv.id,e.target.value)} disabled={esConsulta}
@@ -1118,7 +1130,7 @@ export default function CxpApp({ user, onLogout }) {
             {/* Filtro por Grupo */}
             {gruposList.length > 0 && (
               <select value={filtroGrupo} onChange={e=>setFiltroGrupo(e.target.value)} style={{...selectStyle,maxWidth:180,borderColor:filtroGrupo?C.blue:C.border,color:filtroGrupo?C.blue:C.text,fontWeight:filtroGrupo?700:400}}>
-                <option value="">🏨 Todos los grupos</option>
+                <option value="">Grupo</option>
                 {gruposList.map(g=><option key={g}>{g}</option>)}
               </select>
             )}
@@ -2770,28 +2782,46 @@ function ClientesView({ clientes, setClientes, empresaId, esConsulta = false }) 
 /* ── ResumenCartera component ────────────────────────────────────────── */
 function ResumenCartera({ invoices, suppliers, currency, filtroGrupo, onVerFacturas, fmt, C }) {
   const sym = currency === "USD" ? "$" : currency === "EUR" ? "€" : "$";
+  const hoy = new Date().toISOString().slice(0,10);
 
-  // Build summary: group invoices by proveedor, compute totals
+  // Compute aging buckets for a saldo given vencimiento
+  const aging = (saldo, vencimiento, estatus) => {
+    if(estatus === "Pagado" || saldo <= 0) return {corriente:0,v7:0,v15:0,v30:0,v60:0,vmas:0};
+    if(!vencimiento) return {corriente:saldo,v7:0,v15:0,v30:0,v60:0,vmas:0};
+    const dias = Math.ceil((new Date(vencimiento) - new Date(hoy)) / 864e5);
+    if(dias >= 0) return {corriente:saldo,v7:0,v15:0,v30:0,v60:0,vmas:0};
+    const d = Math.abs(dias);
+    if(d <= 7)  return {corriente:0,v7:saldo,v15:0,v30:0,v60:0,vmas:0};
+    if(d <= 15) return {corriente:0,v7:0,v15:saldo,v30:0,v60:0,vmas:0};
+    if(d <= 30) return {corriente:0,v7:0,v15:0,v30:saldo,v60:0,vmas:0};
+    if(d <= 60) return {corriente:0,v7:0,v15:0,v30:0,v60:saldo,vmas:0};
+    return {corriente:0,v7:0,v15:0,v30:0,v60:0,vmas:saldo};
+  };
+
+  const addAging = (acc, a) => {
+    acc.corriente += a.corriente; acc.v7 += a.v7; acc.v15 += a.v15;
+    acc.v30 += a.v30; acc.v60 += a.v60; acc.vmas += a.vmas;
+  };
+
+  const zeroAging = () => ({corriente:0,v7:0,v15:0,v30:0,v60:0,vmas:0});
+
+  // Build per-proveedor summary
   const byProveedor = useMemo(() => {
     const map = {};
     invoices.forEach(inv => {
       const p = inv.proveedor || "—";
       if(!map[p]) {
         const sup = suppliers.find(s=>s.nombre===p);
-        map[p] = { nombre:p, grupo: sup?.grupo||"", total:0, saldo:0, pagado:0, vencido:0, corriente:0, count:0 };
+        map[p] = { nombre:p, grupo:sup?.grupo||"", total:0, pagado:0, saldo:0, count:0, ...zeroAging() };
       }
       const saldo = (+inv.total||0) - (+inv.montoPagado||0);
-      map[p].total += +inv.total||0;
+      map[p].total  += +inv.total||0;
       map[p].pagado += +inv.montoPagado||0;
-      map[p].saldo += saldo;
-      map[p].count += 1;
-      if(inv.estatus !== "Pagado") {
-        const hoy = new Date().toISOString().slice(0,10);
-        if(inv.vencimiento && inv.vencimiento < hoy) map[p].vencido += saldo;
-        else map[p].corriente += saldo;
-      }
+      map[p].saldo  += saldo;
+      map[p].count  += 1;
+      addAging(map[p], aging(saldo, inv.vencimiento, inv.estatus));
     });
-    return Object.values(map).filter(p=>p.saldo > 0 || p.pagado > 0).sort((a,b)=>b.saldo-a.saldo);
+    return Object.values(map).filter(p=>p.total>0).sort((a,b)=>b.saldo-a.saldo);
   }, [invoices, suppliers]);
 
   // Group by grupo empresarial
@@ -2799,13 +2829,13 @@ function ResumenCartera({ invoices, suppliers, currency, filtroGrupo, onVerFactu
     const map = {};
     byProveedor.forEach(p => {
       const g = p.grupo || "Sin Grupo";
-      if(!map[g]) map[g] = { nombre:g, proveedores:[], total:0, saldo:0, pagado:0, vencido:0, corriente:0 };
+      if(!map[g]) map[g] = { nombre:g, proveedores:[], total:0, pagado:0, saldo:0, count:0, ...zeroAging() };
       map[g].proveedores.push(p);
-      map[g].total += p.total;
-      map[g].saldo += p.saldo;
+      map[g].total  += p.total;
       map[g].pagado += p.pagado;
-      map[g].vencido += p.vencido;
-      map[g].corriente += p.corriente;
+      map[g].saldo  += p.saldo;
+      map[g].count  += p.count;
+      addAging(map[g], p);
     });
     return Object.values(map).sort((a,b)=>b.saldo-a.saldo);
   }, [byProveedor]);
@@ -2815,90 +2845,118 @@ function ResumenCartera({ invoices, suppliers, currency, filtroGrupo, onVerFactu
 
   const displayed = filtroGrupo ? byGrupo.filter(g=>g.nombre===filtroGrupo) : byGrupo;
 
-  const grandTotal = displayed.reduce((s,g)=>s+g.saldo,0);
-  const grandVencido = displayed.reduce((s,g)=>s+g.vencido,0);
-  const grandCorriente = displayed.reduce((s,g)=>s+g.corriente,0);
+  const grand = displayed.reduce((acc,g) => {
+    acc.total+=g.total; acc.pagado+=g.pagado; acc.saldo+=g.saldo; acc.count+=g.count;
+    addAging(acc,g); return acc;
+  }, {total:0,pagado:0,saldo:0,count:0,...zeroAging()});
 
-  const hdr = (label, right=true) => (
-    <th style={{padding:"10px 14px",textAlign:right?"right":"left",color:"#fff",fontWeight:700,fontSize:11,textTransform:"uppercase",whiteSpace:"nowrap"}}>{label}</th>
+  const vCell = (v, intense=false) => v > 0
+    ? <span style={{fontWeight:700,color:intense?"#B71C1C":C.danger}}>{sym}{fmt(v)}</span>
+    : <span style={{color:C.muted,fontSize:11}}>—</span>;
+
+  const hdr = (label, right=true, color="#fff") => (
+    <th style={{padding:"9px 10px",textAlign:right?"right":"left",color,fontWeight:700,fontSize:10,textTransform:"uppercase",whiteSpace:"nowrap",borderRight:`1px solid rgba(255,255,255,0.1)`}}>{label}</th>
   );
 
   return (
     <div>
-      {/* Grand totals */}
-      <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
+      {/* Grand total chips */}
+      <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}>
         {[
-          {l:"Total Adeudo",v:grandTotal,c:C.navy,bg:"#EEF2FF"},
-          {l:"Vencido",v:grandVencido,c:C.danger,bg:"#FFEBEE"},
-          {l:"Corriente",v:grandCorriente,c:C.ok,bg:"#E8F5E9"},
+          {l:"# Facturas",    v:grand.count,     c:C.navy,   bg:"#EEF2FF", isNum:true},
+          {l:"Total",         v:grand.total,      c:C.navy,   bg:"#EEF2FF"},
+          {l:"Pagado",        v:grand.pagado,     c:C.ok,     bg:"#E8F5E9"},
+          {l:"Saldo",         v:grand.saldo,      c:C.navy,   bg:"#E8F0FE"},
+          {l:"Corriente",     v:grand.corriente,  c:C.ok,     bg:"#E8F5E9"},
+          {l:"Venc 1-7d",     v:grand.v7,         c:"#E57373",bg:"#FFF5F5"},
+          {l:"Venc 8-15d",    v:grand.v15,        c:C.danger, bg:"#FFEBEE"},
+          {l:"Venc 16-30d",   v:grand.v30,        c:"#C62828",bg:"#FFCDD2"},
+          {l:"Venc 31-60d",   v:grand.v60,        c:"#B71C1C",bg:"#EF9A9A"},
+          {l:"Venc +60d",     v:grand.vmas,       c:"#7F0000",bg:"#E57373"},
         ].map(k=>(
-          <div key={k.l} style={{background:k.bg,borderRadius:12,padding:"12px 20px",minWidth:160}}>
-            <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",marginBottom:4}}>{k.l}</div>
-            <div style={{fontSize:22,fontWeight:900,color:k.c}}>{sym}{fmt(k.v)}</div>
+          <div key={k.l} style={{background:k.bg,borderRadius:10,padding:"10px 16px",minWidth:110}}>
+            <div style={{fontSize:10,color:C.muted,fontWeight:700,textTransform:"uppercase",marginBottom:3}}>{k.l}</div>
+            <div style={{fontSize:18,fontWeight:900,color:k.c}}>
+              {k.isNum ? k.v : <>{sym}{fmt(k.v)}</>}
+            </div>
           </div>
         ))}
       </div>
 
       {/* Table */}
       <div style={{background:"#fff",border:`1px solid ${C.border}`,borderRadius:14,overflow:"hidden"}}>
-        <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-          <thead>
-            <tr style={{background:C.navy}}>
-              {hdr("Grupo / Proveedor",false)}
-              {hdr("Facturas")}
-              {hdr("Total")}
-              {hdr("Pagado")}
-              {hdr("Saldo")}
-              {hdr("Corriente")}
-              {hdr("Vencido")}
-              {hdr("")}
-            </tr>
-          </thead>
-          <tbody>
-            {displayed.map(grupo => {
-              const expanded = expandedGrupos.has(grupo.nombre);
-              return (
-                <React.Fragment key={grupo.nombre}>
-                  {/* Grupo row */}
-                  <tr style={{background:"#F0F4FF",cursor:"pointer",borderTop:`2px solid ${C.border}`}} onClick={()=>toggleGrupo(grupo.nombre)}>
-                    <td style={{padding:"12px 14px",fontWeight:800,color:C.navy,fontSize:14}}>
-                      <span style={{marginRight:8,fontSize:12,color:C.blue,transition:"transform .2s",display:"inline-block",transform:expanded?"rotate(90deg)":"rotate(0deg)"}}>▶</span>
-                      🏨 {grupo.nombre}
-                      <span style={{marginLeft:8,fontSize:11,color:C.muted,fontWeight:500}}>{grupo.proveedores.length} proveedor{grupo.proveedores.length!==1?"es":""}</span>
-                    </td>
-                    <td style={{padding:"12px 14px",textAlign:"right",fontWeight:600}}>{grupo.proveedores.reduce((s,p)=>s+p.count,0)}</td>
-                    <td style={{padding:"12px 14px",textAlign:"right",fontWeight:700}}>{sym}{fmt(grupo.total)}</td>
-                    <td style={{padding:"12px 14px",textAlign:"right",color:C.ok,fontWeight:700}}>{sym}{fmt(grupo.pagado)}</td>
-                    <td style={{padding:"12px 14px",textAlign:"right",fontWeight:900,color:C.navy,fontSize:15}}>{sym}{fmt(grupo.saldo)}</td>
-                    <td style={{padding:"12px 14px",textAlign:"right",color:C.ok,fontWeight:700}}>{sym}{fmt(grupo.corriente)}</td>
-                    <td style={{padding:"12px 14px",textAlign:"right",color:grupo.vencido>0?C.danger:C.muted,fontWeight:700}}>{grupo.vencido>0?sym+fmt(grupo.vencido):"—"}</td>
-                    <td style={{padding:"12px 14px"}}/>
-                  </tr>
-                  {/* Proveedor rows (expanded) */}
-                  {expanded && grupo.proveedores.map((p,i) => (
-                    <tr key={p.nombre} style={{borderTop:`1px solid ${C.border}`,background:i%2===0?"#FAFBFF":"#fff",cursor:"pointer"}}
-                      onMouseEnter={e=>e.currentTarget.style.background="#E8F0FE"}
-                      onMouseLeave={e=>e.currentTarget.style.background=i%2===0?"#FAFBFF":"#fff"}>
-                      <td style={{padding:"10px 14px 10px 36px",color:C.text,fontWeight:600}}>{p.nombre}</td>
-                      <td style={{padding:"10px 14px",textAlign:"right",color:C.muted}}>{p.count}</td>
-                      <td style={{padding:"10px 14px",textAlign:"right",fontWeight:600}}>{sym}{fmt(p.total)}</td>
-                      <td style={{padding:"10px 14px",textAlign:"right",color:C.ok}}>{sym}{fmt(p.pagado)}</td>
-                      <td style={{padding:"10px 14px",textAlign:"right",fontWeight:800,color:p.saldo>0?C.navy:C.muted}}>{sym}{fmt(p.saldo)}</td>
-                      <td style={{padding:"10px 14px",textAlign:"right",color:C.ok}}>{sym}{fmt(p.corriente)}</td>
-                      <td style={{padding:"10px 14px",textAlign:"right",color:p.vencido>0?C.danger:C.muted,fontWeight:p.vencido>0?700:400}}>{p.vencido>0?sym+fmt(p.vencido):"—"}</td>
-                      <td style={{padding:"10px 14px",textAlign:"right"}}>
-                        <button onClick={()=>onVerFacturas(p.nombre)}
-                          style={{padding:"4px 12px",borderRadius:8,border:`1px solid ${C.blue}`,background:"#E8F0FE",color:C.blue,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit"}}>
-                          Ver facturas →
-                        </button>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:1200}}>
+            <thead>
+              <tr style={{background:C.navy}}>
+                {hdr("Grupo / Proveedor", false)}
+                {hdr("# Fact.")}
+                {hdr("Total")}
+                {hdr("Pagado")}
+                {hdr("Saldo")}
+                <th style={{padding:"9px 10px",textAlign:"right",color:"#A5D6A7",fontWeight:700,fontSize:10,textTransform:"uppercase",whiteSpace:"nowrap"}}>Corriente</th>
+                <th style={{padding:"9px 10px",textAlign:"right",color:"#FFCDD2",fontWeight:700,fontSize:10,textTransform:"uppercase",whiteSpace:"nowrap"}}>Venc 1-7d</th>
+                <th style={{padding:"9px 10px",textAlign:"right",color:"#EF9A9A",fontWeight:700,fontSize:10,textTransform:"uppercase",whiteSpace:"nowrap"}}>Venc 8-15d</th>
+                <th style={{padding:"9px 10px",textAlign:"right",color:"#EF9A9A",fontWeight:700,fontSize:10,textTransform:"uppercase",whiteSpace:"nowrap"}}>Venc 16-30d</th>
+                <th style={{padding:"9px 10px",textAlign:"right",color:"#EF9A9A",fontWeight:700,fontSize:10,textTransform:"uppercase",whiteSpace:"nowrap"}}>Venc 31-60d</th>
+                <th style={{padding:"9px 10px",textAlign:"right",color:"#EF9A9A",fontWeight:700,fontSize:10,textTransform:"uppercase",whiteSpace:"nowrap"}}>Venc +60d</th>
+                {hdr("")}
+              </tr>
+            </thead>
+            <tbody>
+              {displayed.map(grupo => {
+                const expanded = expandedGrupos.has(grupo.nombre);
+                return (
+                  <React.Fragment key={grupo.nombre}>
+                    {/* Grupo row */}
+                    <tr style={{background:"#F0F4FF",cursor:"pointer",borderTop:`2px solid ${C.border}`}} onClick={()=>toggleGrupo(grupo.nombre)}>
+                      <td style={{padding:"12px 14px",fontWeight:800,color:C.navy,fontSize:13}}>
+                        <span style={{marginRight:8,fontSize:11,color:C.blue,display:"inline-block",transform:expanded?"rotate(90deg)":"rotate(0deg)",transition:"transform .2s"}}>▶</span>
+                        🏨 {grupo.nombre}
+                        <span style={{marginLeft:8,fontSize:11,color:C.muted,fontWeight:400}}>{grupo.proveedores.length} prov.</span>
                       </td>
+                      <td style={{padding:"12px 10px",textAlign:"right",fontWeight:600,color:C.muted}}>{grupo.count}</td>
+                      <td style={{padding:"12px 10px",textAlign:"right",fontWeight:700}}>{sym}{fmt(grupo.total)}</td>
+                      <td style={{padding:"12px 10px",textAlign:"right",color:C.ok,fontWeight:700}}>{sym}{fmt(grupo.pagado)}</td>
+                      <td style={{padding:"12px 10px",textAlign:"right",fontWeight:900,color:C.navy,fontSize:14}}>{sym}{fmt(grupo.saldo)}</td>
+                      <td style={{padding:"12px 10px",textAlign:"right",color:C.ok,fontWeight:700}}>{grupo.corriente>0?sym+fmt(grupo.corriente):"—"}</td>
+                      <td style={{padding:"12px 10px",textAlign:"right"}}>{vCell(grupo.v7)}</td>
+                      <td style={{padding:"12px 10px",textAlign:"right"}}>{vCell(grupo.v15)}</td>
+                      <td style={{padding:"12px 10px",textAlign:"right"}}>{vCell(grupo.v30)}</td>
+                      <td style={{padding:"12px 10px",textAlign:"right"}}>{vCell(grupo.v60,true)}</td>
+                      <td style={{padding:"12px 10px",textAlign:"right"}}>{vCell(grupo.vmas,true)}</td>
+                      <td style={{padding:"12px 10px"}}/>
                     </tr>
-                  ))}
-                </React.Fragment>
-              );
-            })}
-          </tbody>
-        </table>
+                    {/* Proveedor rows */}
+                    {expanded && grupo.proveedores.map((p,i) => (
+                      <tr key={p.nombre} style={{borderTop:`1px solid ${C.border}`,background:i%2===0?"#FAFBFF":"#fff"}}
+                        onMouseEnter={e=>e.currentTarget.style.background="#E8F0FE"}
+                        onMouseLeave={e=>e.currentTarget.style.background=i%2===0?"#FAFBFF":"#fff"}>
+                        <td style={{padding:"10px 14px 10px 36px",color:C.text,fontWeight:600,fontSize:12}}>{p.nombre}</td>
+                        <td style={{padding:"10px 10px",textAlign:"right",color:C.muted,fontSize:11}}>{p.count}</td>
+                        <td style={{padding:"10px 10px",textAlign:"right",fontWeight:600}}>{sym}{fmt(p.total)}</td>
+                        <td style={{padding:"10px 10px",textAlign:"right",color:C.ok}}>{sym}{fmt(p.pagado)}</td>
+                        <td style={{padding:"10px 10px",textAlign:"right",fontWeight:800,color:p.saldo>0?C.navy:C.muted}}>{sym}{fmt(p.saldo)}</td>
+                        <td style={{padding:"10px 10px",textAlign:"right",color:C.ok,fontWeight:600}}>{p.corriente>0?sym+fmt(p.corriente):"—"}</td>
+                        <td style={{padding:"10px 10px",textAlign:"right"}}>{vCell(p.v7)}</td>
+                        <td style={{padding:"10px 10px",textAlign:"right"}}>{vCell(p.v15)}</td>
+                        <td style={{padding:"10px 10px",textAlign:"right"}}>{vCell(p.v30)}</td>
+                        <td style={{padding:"10px 10px",textAlign:"right"}}>{vCell(p.v60,true)}</td>
+                        <td style={{padding:"10px 10px",textAlign:"right"}}>{vCell(p.vmas,true)}</td>
+                        <td style={{padding:"10px 10px",textAlign:"right"}}>
+                          <button onClick={()=>onVerFacturas(p.nombre)}
+                            style={{padding:"4px 12px",borderRadius:8,border:`1px solid ${C.blue}`,background:"#E8F0FE",color:C.blue,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                            Ver →
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
         {displayed.length === 0 && (
           <div style={{textAlign:"center",padding:40,color:C.muted}}>
             <div style={{fontSize:36,marginBottom:8}}>📊</div>
