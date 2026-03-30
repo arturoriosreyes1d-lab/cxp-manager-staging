@@ -1127,13 +1127,54 @@ export default function CxpApp({ user, onLogout }) {
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:18,marginBottom:20}}>
           <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
             <input ref={searchRef} placeholder="🔍 Buscar…" value={search} onChange={e=>setSearch(e.target.value)} style={{...inputStyle,maxWidth:200}} />
-            {/* Filtro por Grupo */}
-            {gruposList.length > 0 && (
-              <select value={filtroGrupo} onChange={e=>setFiltroGrupo(e.target.value)} style={{...selectStyle,maxWidth:180,borderColor:filtroGrupo?C.blue:C.border,color:filtroGrupo?C.blue:C.text,fontWeight:filtroGrupo?700:400}}>
-                <option value="">Grupo</option>
-                {gruposList.map(g=><option key={g}>{g}</option>)}
-              </select>
-            )}
+            {/* Filtro por Grupo — picker flotante */}
+            {(()=>{
+              const [open, setOpen] = React.useState(false);
+              const ref = React.useRef(null);
+              React.useEffect(()=>{
+                if(!open) return;
+                const handler = (e)=>{ if(ref.current && !ref.current.contains(e.target)) setOpen(false); };
+                document.addEventListener("mousedown", handler);
+                return ()=>document.removeEventListener("mousedown", handler);
+              },[open]);
+              return (
+                <div ref={ref} style={{position:"relative"}}>
+                  <button onClick={()=>setOpen(o=>!o)} style={{
+                    ...inputStyle, display:"flex", alignItems:"center", gap:6, cursor:"pointer",
+                    background: filtroGrupo?"#E8F0FE":C.surface,
+                    borderColor: filtroGrupo?C.blue:C.border,
+                    color: filtroGrupo?C.blue:C.muted,
+                    fontWeight: filtroGrupo?700:400, minWidth:130, justifyContent:"space-between",
+                  }}>
+                    <span>🏨 {filtroGrupo||"Grupo"}</span>
+                    <span style={{fontSize:10}}>▼</span>
+                  </button>
+                  {open && (
+                    <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,zIndex:999,background:"#fff",border:`1px solid ${C.border}`,borderRadius:10,boxShadow:"0 8px 24px rgba(0,0,0,.12)",minWidth:200,overflow:"hidden"}}>
+                      <div onClick={()=>{setFiltroGrupo("");setOpen(false);}}
+                        style={{padding:"10px 14px",cursor:"pointer",fontSize:13,color:C.muted,borderBottom:`1px solid ${C.border}`,background:!filtroGrupo?"#F0F4FF":"#fff"}}
+                        onMouseEnter={e=>e.currentTarget.style.background="#F0F4FF"}
+                        onMouseLeave={e=>e.currentTarget.style.background=!filtroGrupo?"#F0F4FF":"#fff"}>
+                        Todos los grupos
+                      </div>
+                      {gruposList.length === 0 && (
+                        <div style={{padding:"12px 14px",fontSize:12,color:C.muted,fontStyle:"italic"}}>
+                          Sin grupos configurados.<br/>Asigna grupos en Proveedores.
+                        </div>
+                      )}
+                      {gruposList.map(g=>(
+                        <div key={g} onClick={()=>{setFiltroGrupo(g);setOpen(false);}}
+                          style={{padding:"10px 14px",cursor:"pointer",fontSize:13,fontWeight:filtroGrupo===g?700:400,color:filtroGrupo===g?C.blue:C.text,background:filtroGrupo===g?"#E8F0FE":"#fff"}}
+                          onMouseEnter={e=>e.currentTarget.style.background="#F0F4FF"}
+                          onMouseLeave={e=>e.currentTarget.style.background=filtroGrupo===g?"#E8F0FE":"#fff"}>
+                          🏨 {g}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             <select value={filters.proveedor} onChange={e=>setFilters(f=>({...f,proveedor:e.target.value}))} style={{...selectStyle,maxWidth:200}}>
               <option value="">Todos los proveedores</option>
               {[...new Set(curInvoices.map(i=>i.proveedor))].sort().map(p=><option key={p}>{p}</option>)}
