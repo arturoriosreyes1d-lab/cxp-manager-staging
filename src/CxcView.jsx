@@ -88,6 +88,7 @@ export default function CxcView({
   categorias, setCategorias,
   empresaId,
   clientes = [],
+  esConsulta = false,
 }) {
   /* ── Filters ───────────────────────────────────────────────── */
   const [filtroCliente, setFiltroCliente] = useState("");
@@ -851,6 +852,7 @@ export default function CxcView({
               <span style={{fontSize:11,fontWeight:500,color:C.muted}}>({ingCobros.filter(c=>c.tipo!=='proyectado').length})</span>
             </h3>
             <div style={{background:"#F0FFF4",border:"1px solid #A5D6A7",borderRadius:10,padding:12,marginBottom:10}}>
+              {!esConsulta && <>
               <div style={{fontSize:11,fontWeight:700,color:C.ok,marginBottom:8}}>+ Registrar cobro recibido</div>
               <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"flex-end"}}>
                 <div>
@@ -868,6 +870,8 @@ export default function CxcView({
                 <button onClick={()=>{if(!cobroMonto||+cobroMonto<=0||!cobroFecha) return; addCobro(ing.id,cobroMonto,cobroFecha,cobroNotas,'realizado'); setCobroMonto(""); setCobroNotas("");}}
                   style={{...btnStyle,padding:"7px 14px",fontSize:12,background:C.ok}}>+ Agregar</button>
               </div>
+              </>}
+              {esConsulta && <div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>Solo lectura — no puedes agregar cobros</div>}
             </div>
             {ingCobros.filter(c=>c.tipo!=='proyectado').length === 0
               ? <div style={{textAlign:"center",color:C.muted,fontSize:12,padding:12}}>Sin cobros realizados</div>
@@ -1330,11 +1334,14 @@ export default function CxcView({
         </td>
         {/* Segmento */}
         <td style={{padding:"8px 8px"}} onClick={e=>e.stopPropagation()}>
-          <input value={ing.segmento||""} onChange={e=>{
-            const v=e.target.value;
-            setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,segmento:v}:i));
-            updateIngresoField(ing.id,{segmento:v});
-          }} placeholder="—" style={{padding:"3px 7px",fontSize:11,border:`1px solid ${C.border}`,borderRadius:6,width:70,fontFamily:"inherit",background:"#FAFBFC"}}/>
+          {esConsulta
+            ? <span style={{fontSize:12,color:C.text,padding:"3px 7px"}}>{ing.segmento||"—"}</span>
+            : <input value={ing.segmento||""} onChange={e=>{
+                const v=e.target.value;
+                setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,segmento:v}:i));
+                updateIngresoField(ing.id,{segmento:v});
+              }} placeholder="—" style={{padding:"3px 7px",fontSize:11,border:`1px solid ${C.border}`,borderRadius:6,width:70,fontFamily:"inherit",background:"#FAFBFC"}}/>
+          }
         </td>
         {/* Cliente */}
         <td style={{padding:"10px 10px",fontWeight:700,color:C.navy,maxWidth:140,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ing.cliente}</td>
@@ -1350,11 +1357,14 @@ export default function CxcView({
         </td>
         {/* Fecha Contable */}
         <td style={{padding:"8px 8px"}} onClick={e=>e.stopPropagation()}>
-          <input type="date" value={ing.fechaContable||""} onChange={e=>{
-            const v=e.target.value;
-            setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,fechaContable:v}:i));
-            updateIngresoField(ing.id,{fechaContable:v});
-          }} style={{padding:"3px 6px",fontSize:11,border:`1px solid ${ing.fechaContable?C.teal:C.border}`,borderRadius:6,color:ing.fechaContable?C.teal:C.text,width:125,fontFamily:"inherit"}}/>
+          {esConsulta
+            ? <span style={{fontSize:11,color:C.teal}}>{ing.fechaContable||"—"}</span>
+            : <input type="date" value={ing.fechaContable||""} onChange={e=>{
+                const v=e.target.value;
+                setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,fechaContable:v}:i));
+                updateIngresoField(ing.id,{fechaContable:v});
+              }} style={{padding:"3px 6px",fontSize:11,border:`1px solid ${ing.fechaContable?C.teal:C.border}`,borderRadius:6,color:ing.fechaContable?C.teal:C.text,width:125,fontFamily:"inherit"}}/>
+          }
         </td>
         {/* Fecha Factura */}
         <td style={{padding:"10px 10px",whiteSpace:"nowrap",fontSize:11,color:C.muted}}>{ing.fecha||"—"}</td>
@@ -1376,11 +1386,14 @@ export default function CxcView({
         </td>
         {/* Fecha Ficticia */}
         <td style={{padding:"8px 8px"}} onClick={e=>e.stopPropagation()}>
-          <input type="date" value={ing.fechaFicticia||""} onChange={e=>{
-            const v=e.target.value;
-            setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,fechaFicticia:v}:i));
-            updateIngresoField(ing.id,{fechaFicticia:v});
-          }} style={{padding:"3px 6px",fontSize:11,width:125,border:`1px solid ${ing.fechaFicticia?"#7B1FA2":C.border}`,borderRadius:6,color:ing.fechaFicticia?"#7B1FA2":C.text,fontFamily:"inherit"}}/>
+          {esConsulta
+            ? <span style={{fontSize:11,color:ing.fechaFicticia?"#7B1FA2":C.muted}}>{ing.fechaFicticia||"—"}</span>
+            : <input type="date" value={ing.fechaFicticia||""} onChange={e=>{
+                const v=e.target.value;
+                setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,fechaFicticia:v}:i));
+                updateIngresoField(ing.id,{fechaFicticia:v});
+              }} style={{padding:"3px 6px",fontSize:11,width:125,border:`1px solid ${ing.fechaFicticia?"#7B1FA2":C.border}`,borderRadius:6,color:ing.fechaFicticia?"#7B1FA2":C.text,fontFamily:"inherit"}}/>
+          }
         </td>
         <td style={{padding:"10px 10px",fontWeight:700,textAlign:"right",whiteSpace:"nowrap"}}>{sym}{fmt(ing.monto)}</td>
         <td style={{padding:"10px 10px",fontWeight:600,color:C.ok,textAlign:"right",whiteSpace:"nowrap"}}>{sym}{fmt(m.totalCobrado||0)}</td>
@@ -1397,8 +1410,8 @@ export default function CxcView({
         </td>
         <td style={{padding:"10px 8px",whiteSpace:"nowrap"}} onClick={e=>e.stopPropagation()}>
           <button onClick={()=>setDetailIngreso(ing.id)} style={{...iconBtn,color:C.sky}} title="Ver detalle">🔍</button>
-          <button onClick={()=>setModalIngreso({...ing})} style={{...iconBtn,color:C.blue}} title="Editar">✏️</button>
-          <button onClick={()=>setDeleteConfirm({id:ing.id,label:`${ing.cliente} — ${ing.folio||ing.concepto||ing.segmento}`})} style={{...iconBtn,color:C.danger}} title="Eliminar">🗑️</button>
+          {!esConsulta && <button onClick={()=>setModalIngreso({...ing})} style={{...iconBtn,color:C.blue}} title="Editar">✏️</button>}
+          {!esConsulta && <button onClick={()=>setDeleteConfirm({id:ing.id,label:`${ing.cliente} — ${ing.folio||ing.concepto||ing.segmento}`})} style={{...iconBtn,color:C.danger}} title="Eliminar">🗑️</button>}
         </td>
       </tr>
     );
@@ -1625,13 +1638,13 @@ export default function CxcView({
             <button onClick={()=>setVistaGrupo("ingreso")} style={{padding:"8px 14px",border:"none",background:vistaGrupo==="ingreso"?C.navy:"#F1F5F9",color:vistaGrupo==="ingreso"?"#fff":C.text,fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>📋 Por ingreso</button>
           </div>
           {/* Importar Excel TravelAirSolutions */}
-          {empresaId === "empresa_2" && (
+          {empresaId === "empresa_2" && !esConsulta && (
             <button onClick={()=>{setTasPreview(null);setTasModal(true);}} style={{...btnStyle,background:"#C0392B",color:"#fff",padding:"8px 16px",fontSize:13}}>✈️ Importar TAS</button>
           )}
-          <button onClick={()=>{setImportPreview(null);setImportModal(true);}} style={{...btnStyle,background:"#00897B",color:"#fff",padding:"8px 16px",fontSize:13}}>📥 Importar Excel</button>
-          <button onClick={()=>setModalIngreso({id:"",cliente:"",concepto:"",categoria:catList[0]||"Circuito",monto:"",moneda:"MXN",tipoCambio:1,fecha:today(),notas:""})} style={btnStyle}>
+          {!esConsulta && <button onClick={()=>{setImportPreview(null);setImportModal(true);}} style={{...btnStyle,background:"#00897B",color:"#fff",padding:"8px 16px",fontSize:13}}>📥 Importar Excel</button>}
+          {!esConsulta && <button onClick={()=>setModalIngreso({id:"",cliente:"",concepto:"",categoria:catList[0]||"Circuito",monto:"",moneda:"MXN",tipoCambio:1,fecha:today(),notas:""})} style={btnStyle}>
             + Nuevo Ingreso
-          </button>
+          </button>}
         </div>
       </div>
       {/* Hidden file inputs */}
@@ -1827,7 +1840,7 @@ export default function CxcView({
       </div>
 
       {/* Bulk toolbar */}
-      {selectedIngresos.size > 0 && (
+      {selectedIngresos.size > 0 && !esConsulta && (
         <div style={{background:"#E8F0FE",border:`1px solid ${C.blue}`,borderRadius:10,padding:"10px 16px",marginBottom:12}}>
           <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
             <span style={{fontWeight:700,color:C.blue,fontSize:13}}>{selectedIngresos.size} ingreso{selectedIngresos.size!==1?"s":""} seleccionado{selectedIngresos.size!==1?"s":""}</span>
@@ -1971,7 +1984,10 @@ export default function CxcView({
                               </td>
                               {/* Segmento */}
                               <td style={{padding:"8px 6px"}} onClick={e=>e.stopPropagation()}>
-                                <input value={ing.segmento||""} onChange={e=>{const v=e.target.value;setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,segmento:v}:i));updateIngresoField(ing.id,{segmento:v});}} placeholder="—" style={{padding:"2px 5px",fontSize:10,border:`1px solid ${C.border}`,borderRadius:5,width:55,fontFamily:"inherit"}}/>
+                                {esConsulta
+                                  ? <span style={{fontSize:11,padding:"2px 5px"}}>{ing.segmento||"—"}</span>
+                                  : <input value={ing.segmento||""} onChange={e=>{const v=e.target.value;setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,segmento:v}:i));updateIngresoField(ing.id,{segmento:v});}} placeholder="—" style={{padding:"2px 5px",fontSize:10,border:`1px solid ${C.border}`,borderRadius:5,width:55,fontFamily:"inherit"}}/>
+                                }
                               </td>
                               {/* Folio */}
                               <td style={{padding:"9px 8px",fontSize:11,color:C.blue,fontWeight:600,whiteSpace:"nowrap"}}>{ing.folio||"—"}</td>
@@ -1979,7 +1995,10 @@ export default function CxcView({
                               <td style={{padding:"9px 8px",color:ing.concepto?C.text:C.muted,fontStyle:ing.concepto?"normal":"italic",minWidth:120}}>{ing.concepto||"—"}</td>
                               {/* Fecha Contable */}
                               <td style={{padding:"8px 6px"}} onClick={e=>e.stopPropagation()}>
-                                <input type="date" value={ing.fechaContable||""} onChange={e=>{const v=e.target.value;setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,fechaContable:v}:i));updateIngresoField(ing.id,{fechaContable:v});}} style={{padding:"2px 5px",fontSize:10,border:`1px solid ${ing.fechaContable?C.teal:C.border}`,borderRadius:5,color:ing.fechaContable?C.teal:C.text,width:112,fontFamily:"inherit"}}/>
+                                {esConsulta
+                                  ? <span style={{fontSize:11,color:ing.fechaContable?C.teal:C.muted}}>{ing.fechaContable||"—"}</span>
+                                  : <input type="date" value={ing.fechaContable||""} onChange={e=>{const v=e.target.value;setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,fechaContable:v}:i));updateIngresoField(ing.id,{fechaContable:v});}} style={{padding:"2px 5px",fontSize:10,border:`1px solid ${ing.fechaContable?C.teal:C.border}`,borderRadius:5,color:ing.fechaContable?C.teal:C.text,width:112,fontFamily:"inherit"}}/>
+                                }
                               </td>
                               <td style={{padding:"9px 8px",whiteSpace:"nowrap",fontSize:11,color:C.muted}}>{ing.fecha||"—"}</td>
                               <td style={{padding:"9px 8px",whiteSpace:"nowrap",fontSize:11,color:venceProx?C.danger:C.text,fontWeight:ing.fechaVencimiento?600:400}}>{ing.fechaVencimiento||"—"}</td>
@@ -1989,7 +2008,10 @@ export default function CxcView({
                               <td style={{padding:"9px 6px",textAlign:"center"}}>{(() => { const d=diasDiff(ing.fechaVencimiento); return d!==null&&d>=0?<span style={{background:d<=7?"#FFF3E0":d<=30?"#FFFDE7":"#E8F5E9",color:d<=7?C.danger:d<=30?C.warn:C.ok,fontWeight:800,fontSize:10,padding:"2px 6px",borderRadius:20}}>{d}d</span>:<span style={{color:C.muted,fontSize:10}}>—</span>; })()}</td>
                               {/* Fecha Ficticia */}
                               <td style={{padding:"8px 6px"}} onClick={e=>e.stopPropagation()}>
-                                <input type="date" value={ing.fechaFicticia||""} onChange={e=>{const v=e.target.value;setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,fechaFicticia:v}:i));updateIngresoField(ing.id,{fechaFicticia:v});}} style={{padding:"2px 5px",fontSize:10,border:`1px solid ${ing.fechaFicticia?"#7B1FA2":C.border}`,borderRadius:5,color:ing.fechaFicticia?"#7B1FA2":C.text,width:112,fontFamily:"inherit"}}/>
+                                {esConsulta
+                                  ? <span style={{fontSize:11,color:ing.fechaFicticia?"#7B1FA2":C.muted}}>{ing.fechaFicticia||"—"}</span>
+                                  : <input type="date" value={ing.fechaFicticia||""} onChange={e=>{const v=e.target.value;setIngresos(prev=>prev.map(i=>i.id===ing.id?{...i,fechaFicticia:v}:i));updateIngresoField(ing.id,{fechaFicticia:v});}} style={{padding:"2px 5px",fontSize:10,border:`1px solid ${ing.fechaFicticia?"#7B1FA2":C.border}`,borderRadius:5,color:ing.fechaFicticia?"#7B1FA2":C.text,width:112,fontFamily:"inherit"}}/>
+                                }
                               </td>
                               <td style={{padding:"9px 10px",fontWeight:700,textAlign:"right"}}>{sym}{fmt(ing.monto)}</td>
                               <td style={{padding:"9px 10px",color:C.ok,textAlign:"right"}}>{sym}{fmt(m.totalCobrado||0)}</td>
@@ -2004,8 +2026,8 @@ export default function CxcView({
                               </td>
                               <td style={{padding:"9px 8px",whiteSpace:"nowrap"}} onClick={e=>e.stopPropagation()}>
                                 <button onClick={()=>setDetailIngreso(ing.id)} style={{...iconBtn,color:C.sky,fontSize:14}} title="Detalle">🔍</button>
-                                <button onClick={()=>setModalIngreso({...ing})} style={{...iconBtn,color:C.blue,fontSize:14}} title="Editar">✏️</button>
-                                <button onClick={()=>setDeleteConfirm({id:ing.id,label:`${ing.cliente} — ${ing.concepto||ing.categoria}`})} style={{...iconBtn,color:C.danger,fontSize:14}} title="Eliminar">🗑️</button>
+                                {!esConsulta && <button onClick={()=>setModalIngreso({...ing})} style={{...iconBtn,color:C.blue,fontSize:14}} title="Editar">✏️</button>}
+                                {!esConsulta && <button onClick={()=>setDeleteConfirm({id:ing.id,label:`${ing.cliente} — ${ing.concepto||ing.categoria}`})} style={{...iconBtn,color:C.danger,fontSize:14}} title="Eliminar">🗑️</button>}
                               </td>
                             </tr>
                           );

@@ -73,6 +73,7 @@ const supToApp = (row) => ({
   clasificacion: row.clasificacion || 'Otros',
   activo: row.activo !== false,
   empresaId: row.empresa_id || null,
+  grupo: row.grupo || '',
 });
 
 const supToDB = (sup) => ({
@@ -89,6 +90,7 @@ const supToDB = (sup) => ({
   clasificacion: sup.clasificacion || 'Otros',
   activo: sup.activo !== false,
   empresa_id: sup.empresaId || null,
+  grupo: sup.grupo || null,
 });
 
 /* ── Invoices ────────────────────────────────────────────────── */
