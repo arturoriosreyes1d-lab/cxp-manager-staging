@@ -28,6 +28,8 @@ const toApp = (row) => ({
   voBo: row.vo_bo || false,
   autorizadoDireccion: row.autorizado_direccion || false,
   empresaId: row.empresa_id || null,
+  enEfe: row.en_efe || false,
+  fechaEfe: row.fecha_efe || '',
 });
 
 const toDB = (inv) => ({
@@ -57,6 +59,8 @@ const toDB = (inv) => ({
   vo_bo: inv.voBo || false,
   autorizado_direccion: inv.autorizadoDireccion || false,
   empresa_id: inv.empresaId || null,
+  en_efe: inv.enEfe || false,
+  fecha_efe: inv.fechaEfe || null,
 });
 
 const supToApp = (row) => ({
@@ -150,6 +154,8 @@ export async function updateInvoiceField(id, fields) {
   if ('concepto' in fields) dbFields.concepto = fields.concepto;
   if ('voBo' in fields) dbFields.vo_bo = fields.voBo;
   if ('autorizadoDireccion' in fields) dbFields.autorizado_direccion = fields.autorizadoDireccion;
+  if ('enEfe'    in fields) dbFields.en_efe    = fields.enEfe;
+  if ('fechaEfe' in fields) dbFields.fecha_efe = fields.fechaEfe || null;
   const { error } = await supabase.from('invoices').update(dbFields).eq('id', id);
   if (error) console.error('updateInvoiceField:', error);
 }
@@ -290,6 +296,8 @@ const ingresoToApp = (r) => ({
   fechaContable: r.fecha_contable || '',
   folio: r.folio || '',
   oculta: r.oculta || false,
+  enEfe: r.en_efe || false,
+  fechaEfe: r.fecha_efe || '',
 });
 
 const ingresoToDB = (i) => ({
@@ -384,7 +392,9 @@ export async function updateIngresoField(id, fields) {
   if ('segmento' in fields) dbFields.segmento = fields.segmento || null;
   if ('fechaContable' in fields) dbFields.fecha_contable = fields.fechaContable || null;
   if ('folio' in fields) dbFields.folio = fields.folio || null;
-  if ('oculta' in fields) dbFields.oculta = fields.oculta;
+  if ('oculta'    in fields) dbFields.oculta     = fields.oculta;
+  if ('enEfe'     in fields) dbFields.en_efe     = fields.enEfe;
+  if ('fechaEfe'  in fields) dbFields.fecha_efe  = fields.fechaEfe || null;
   const { error } = await supabase.from('ingresos').update(dbFields).eq('id', id);
   if (error) console.error('updateIngresoField:', error);
 }
