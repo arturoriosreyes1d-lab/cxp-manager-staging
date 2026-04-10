@@ -586,109 +586,149 @@ export default function EfeView({
                 </>
               )}
 
-              {/* SUMA DIVISAS */}
-              <tr style={{background:"#1B5E20",borderTop:`2px solid #2E7D32`}}>
-                <td colSpan={3} style={{fontWeight:800,color:"#fff",padding:"6px 10px",fontSize:12,
-                  borderRight:`1px solid rgba(255,255,255,.2)`}}>SUMA DIVISAS</td>
+              {/* ── SUMA DIVISAS ── */}
+              <tr style={{background:"#F5F5F5",borderTop:"2px solid #BDBDBD"}}>
+                <td colSpan={3} style={{fontWeight:700,color:"#424242",padding:"6px 14px",
+                  fontSize:12,textAlign:"right",borderRight:"1px solid #E0E0E0",
+                  letterSpacing:.3}}>SUMA DIVISAS</td>
                 {weekDays.map(({date})=>{
                   const dt=ingDayTot[date];
                   const s=(dt?.MXN||0)+(dt?.USD||0)+(dt?.EUR||0);
-                  return<td key={date} style={{textAlign:"right",fontWeight:700,color:"#fff",
-                    padding:"6px 8px",fontSize:12,borderRight:`1px solid rgba(255,255,255,.2)`}}>
-                    {s>0?`$ ${fmt(s)}`:"$ —"}
+                  return<td key={date} style={{textAlign:"right",fontWeight:s?700:400,
+                    color:s?"#1B5E20":"#B0BEC5",padding:"6px 8px",fontSize:12,
+                    borderRight:"1px solid #E0E0E0"}}>
+                    {s?`$ ${fmt(s)}`:"$ —"}
                   </td>;
                 })}
-                <td style={{textAlign:"right",fontWeight:800,color:"#fff",padding:"6px 8px",fontSize:12,
-                  borderRight:`1px solid rgba(255,255,255,.2)`}}>
+                <td style={{textAlign:"right",fontWeight:700,
+                  color:(ingWeekTot.MXN+ingWeekTot.USD+ingWeekTot.EUR)?"#1B5E20":"#B0BEC5",
+                  padding:"6px 8px",fontSize:12,borderRight:"1px solid #E0E0E0"}}>
                   {(ingWeekTot.MXN+ingWeekTot.USD+ingWeekTot.EUR)>0
                     ?`$ ${fmt(ingWeekTot.MXN+ingWeekTot.USD+ingWeekTot.EUR)}`:"$ —"}
                 </td>
-                <td/>
+                <td style={{background:"#F5F5F5"}}/>
               </tr>
 
-              {/* INGRESOS POR DIVISA */}
-              <tr style={{background:"#004D40"}}>
-                <td colSpan={9} style={{padding:"4px 10px",fontSize:10,
-                  color:"#80CBC4",fontWeight:700,letterSpacing:.5}}>INGRESOS POR DIVISA</td>
+              {/* ── ESPACIO ── */}
+              <tr><td colSpan={9} style={{height:18,background:"#FAFAFA",
+                borderTop:"1px solid #E0E0E0",borderBottom:"1px solid #E0E0E0"}}/></tr>
+
+              {/* ══ INGRESOS POR DIVISA ══ */}
+              {/* Header */}
+              <tr>
+                <td colSpan={9} style={{
+                  padding:"7px 14px",fontWeight:700,fontSize:12,color:"#fff",
+                  background:"#1565C0",letterSpacing:.4,
+                  borderTop:"2px solid #1565C0",borderLeft:"2px solid #90CAF9",
+                  borderRight:"2px solid #90CAF9"}}>
+                  INGRESOS POR DIVISA
+                </td>
               </tr>
-              {CURRENCIES.map(cur=>{
+              {CURRENCIES.map((cur,ci)=>{
                 const wt=ingWeekTot[cur]||0;
-                if(!wt&&!weekDays.some(({date})=>(ingDayTot[date]?.[cur]||0)>0)) return null;
-                const clr={MXN:"#B2DFDB",USD:"#A5F3FC",EUR:"#C4B5FD"}[cur];
+                const isLast=ci===CURRENCIES.length-1;
+                const rowBgC=ci%2===0?"#FFFFFF":"#F5F7FA";
+                const bdBottom=isLast?"2px solid #90CAF9":"1px solid #E3E8EF";
                 return(
-                  <tr key={cur} style={{background:"#00695C",borderBottom:"1px solid #00796B"}}>
-                    <td colSpan={3} style={{padding:"5px 10px",fontWeight:700,color:clr,fontSize:12,
-                      borderRight:"1px solid rgba(255,255,255,.15)"}}>
+                  <tr key={cur} style={{background:rowBgC}}>
+                    <td colSpan={3} style={{padding:"7px 14px",fontSize:13,color:"#546E7A",
+                      textAlign:"center",fontWeight:500,
+                      borderLeft:"2px solid #90CAF9",borderBottom:bdBottom,
+                      borderRight:"1px solid #E3E8EF"}}>
                       {cur==="MXN"?"MN":cur}
                     </td>
                     {weekDays.map(({date})=>{
                       const v=ingDayTot[date]?.[cur]||0;
-                      return<td key={date} style={{textAlign:"right",fontWeight:v?700:400,
-                        color:v?clr:"rgba(255,255,255,.3)",padding:"5px 8px",fontSize:12,
-                        borderRight:"1px solid rgba(255,255,255,.15)"}}>
+                      return<td key={date} style={{textAlign:"right",fontWeight:v?600:400,
+                        color:v?"#2E7D32":"#B0BEC5",padding:"7px 8px",fontSize:12,
+                        borderRight:"1px solid #E3E8EF",borderBottom:bdBottom}}>
                         {v?`$ ${fmt(v)}`:"$ —"}
                       </td>;
                     })}
-                    <td style={{textAlign:"right",fontWeight:700,color:clr,padding:"5px 8px",fontSize:12,
-                      borderRight:"1px solid rgba(255,255,255,.15)"}}>
+                    <td style={{textAlign:"right",fontWeight:wt?700:400,
+                      color:wt?"#2E7D32":"#B0BEC5",padding:"7px 8px",fontSize:12,
+                      borderRight:"2px solid #90CAF9",borderBottom:bdBottom}}>
                       {wt?`$ ${fmt(wt)}`:"$ —"}
                     </td>
-                    <td style={{padding:"4px 6px",textAlign:"center"}}><Badge cur={cur}/></td>
+                    <td style={{background:rowBgC,borderBottom:bdBottom,
+                      borderRight:"2px solid #90CAF9"}}/>
                   </tr>
                 );
               })}
 
-              {/* INGRESOS CONVERSIÓN A MONEDA NACIONAL */}
-              <tr style={{background:"#1A237E"}}>
-                <td colSpan={9} style={{padding:"4px 10px",fontSize:10,
-                  color:"#9FA8DA",fontWeight:700,letterSpacing:.5}}>
-                  INGRESOS CONVERSIÓN A MONEDA NACIONAL  ·  USD ×{tipoCambio.USD.toFixed(4)}  ·  EUR ×{tipoCambio.EUR.toFixed(4)}
+              {/* ── ESPACIO ── */}
+              <tr><td colSpan={9} style={{height:18,background:"#FAFAFA",
+                borderTop:"1px solid #E0E0E0",borderBottom:"1px solid #E0E0E0"}}/></tr>
+
+              {/* ══ INGRESOS CONVERSION A MONEDA NACIONAL ══ */}
+              {/* Header */}
+              <tr>
+                <td colSpan={9} style={{
+                  padding:"7px 14px",fontWeight:700,fontSize:12,color:"#fff",
+                  background:"#1565C0",letterSpacing:.4,
+                  borderTop:"2px solid #1565C0",borderLeft:"2px solid #90CAF9",
+                  borderRight:"2px solid #90CAF9"}}>
+                  INGRESOS CONVERSION A MONEDA NACIONAL
+                  <span style={{fontSize:10,fontWeight:400,marginLeft:12,opacity:.85}}>
+                    USD ×{tipoCambio.USD.toFixed(4)} · EUR ×{tipoCambio.EUR.toFixed(4)}
+                  </span>
                 </td>
               </tr>
               {[
-                {cur:"MXN", factor:1, label:"MN",  clr:"#C5CAE9"},
-                {cur:"USD", factor:tipoCambio.USD, label:"USD", clr:"#B3E5FC"},
-                {cur:"EUR", factor:tipoCambio.EUR, label:"EUR", clr:"#E1BEE7"},
-              ].map(({cur,factor,label,clr})=>{
+                {cur:"MXN",factor:1,        label:"MN"},
+                {cur:"USD",factor:tipoCambio.USD, label:"USD"},
+                {cur:"EUR",factor:tipoCambio.EUR, label:"EUR"},
+              ].map(({cur,factor,label},ci)=>{
                 const wt=(ingWeekTot[cur]||0)*factor;
+                const rowBgC=ci%2===0?"#FFFFFF":"#F5F7FA";
                 return(
-                  <tr key={cur} style={{background:"#283593",borderBottom:"1px solid #303F9F"}}>
-                    <td colSpan={3} style={{padding:"5px 10px",fontWeight:700,color:clr,fontSize:12,
-                      borderRight:"1px solid rgba(255,255,255,.1)"}}>{label}</td>
+                  <tr key={cur} style={{background:rowBgC}}>
+                    <td colSpan={3} style={{padding:"7px 14px",fontSize:13,color:"#546E7A",
+                      textAlign:"center",fontWeight:500,
+                      borderLeft:"2px solid #90CAF9",borderBottom:"1px solid #E3E8EF",
+                      borderRight:"1px solid #E3E8EF"}}>
+                      {label}
+                    </td>
                     {weekDays.map(({date})=>{
                       const v=(ingDayTot[date]?.[cur]||0)*factor;
-                      return<td key={date} style={{textAlign:"right",fontWeight:v?700:400,
-                        color:v?clr:"rgba(255,255,255,.3)",padding:"5px 8px",fontSize:12,
-                        borderRight:"1px solid rgba(255,255,255,.1)"}}>
+                      return<td key={date} style={{textAlign:"right",fontWeight:v?600:400,
+                        color:v?"#2E7D32":"#B0BEC5",padding:"7px 8px",fontSize:12,
+                        borderRight:"1px solid #E3E8EF",borderBottom:"1px solid #E3E8EF"}}>
                         {v?`$ ${fmt(v)}`:"$ —"}
                       </td>;
                     })}
-                    <td style={{textAlign:"right",fontWeight:700,color:clr,padding:"5px 8px",fontSize:12,
-                      borderRight:"1px solid rgba(255,255,255,.1)"}}>
+                    <td style={{textAlign:"right",fontWeight:wt?700:400,
+                      color:wt?"#2E7D32":"#B0BEC5",padding:"7px 8px",fontSize:12,
+                      borderRight:"2px solid #90CAF9",borderBottom:"1px solid #E3E8EF"}}>
                       {wt?`$ ${fmt(wt)}`:"$ —"}
                     </td>
-                    <td/>
+                    <td style={{background:rowBgC,borderBottom:"1px solid #E3E8EF",
+                      borderRight:"2px solid #90CAF9"}}/>
                   </tr>
                 );
               })}
-              {/* Total conversión */}
-              <tr style={{background:"#0D47A1",borderTop:"2px solid #1565C0"}}>
-                <td colSpan={3} style={{fontWeight:800,color:"#fff",padding:"7px 10px",fontSize:13,
-                  borderRight:"1px solid rgba(255,255,255,.2)"}}>TOTAL MN EQUIVALENTE</td>
+              {/* Fila total — igual al Excel */}
+              <tr style={{background:"#FFFFFF"}}>
+                <td colSpan={3} style={{padding:"8px 14px",
+                  borderLeft:"2px solid #90CAF9",borderBottom:"2px solid #90CAF9",
+                  borderRight:"1px solid #E3E8EF",borderTop:"1px solid #E3E8EF"}}/>
                 {weekDays.map(({date})=>{
                   const dt=ingDayTot[date];
                   const v=(dt?.MXN||0)+(dt?.USD||0)*tipoCambio.USD+(dt?.EUR||0)*tipoCambio.EUR;
-                  return<td key={date} style={{textAlign:"right",fontWeight:800,
-                    color:v?"#FFE082":"rgba(255,255,255,.4)",padding:"7px 8px",fontSize:13,
-                    borderRight:"1px solid rgba(255,255,255,.2)"}}>
+                  return<td key={date} style={{textAlign:"right",fontWeight:v?800:400,
+                    color:v?"#1B5E20":"#B0BEC5",padding:"8px 8px",fontSize:13,
+                    borderRight:"1px solid #E3E8EF",borderBottom:"2px solid #90CAF9",
+                    borderTop:"1px solid #E3E8EF"}}>
                     {v?`$ ${fmt(v)}`:"$ —"}
                   </td>;
                 })}
-                <td style={{textAlign:"right",fontWeight:800,color:"#FFE082",padding:"7px 8px",fontSize:13,
-                  borderRight:"1px solid rgba(255,255,255,.2)"}}>
+                <td style={{textAlign:"right",fontWeight:800,padding:"8px 8px",fontSize:13,
+                  borderRight:"2px solid #90CAF9",borderBottom:"2px solid #90CAF9",
+                  borderTop:"1px solid #E3E8EF",
+                  color:(()=>{const v=(ingWeekTot.MXN||0)+(ingWeekTot.USD||0)*tipoCambio.USD+(ingWeekTot.EUR||0)*tipoCambio.EUR;return v?"#1B5E20":"#B0BEC5";})()}}>
                   {(()=>{const v=(ingWeekTot.MXN||0)+(ingWeekTot.USD||0)*tipoCambio.USD+(ingWeekTot.EUR||0)*tipoCambio.EUR;return v?`$ ${fmt(v)}`:"$ —";})()}
                 </td>
-                <td/>
+                <td style={{borderBottom:"2px solid #90CAF9",borderRight:"2px solid #90CAF9"}}/>
               </tr>
 
               {/* ── ESPACIO ── */}
