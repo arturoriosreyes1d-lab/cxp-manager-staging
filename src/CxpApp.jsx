@@ -12,6 +12,10 @@ import {
   fetchIngresos, fetchCobros, fetchInvoiceIngresos, fetchCategoriasIngreso,
   upsertInvoiceIngreso, deleteInvoiceIngreso,
   fetchClientes, upsertCliente, deleteCliente,
+  fetchPorFacturar, insertPorFacturar, updatePorFacturar, deletePorFacturar, bulkInsertPorFacturar,
+  fetchFinanciamientos, insertFinanciamiento, updateFinanciamiento, deleteFinanciamiento,
+  fetchFinanciamientoPagos, insertFinanciamientoPago, deleteFinanciamientoPago,
+  fetchTarjetas, updateTarjetaSaldo, fetchTarjetaMovimientos, bulkInsertMovimientos,
 } from "./db.js";
 import CxcView from "./CxcView.jsx";
 import { EMPRESAS } from "./empresas.js";
@@ -36,6 +40,24 @@ const today = () => new Date().toISOString().split("T")[0];
 const addDays = (ds,d) => { if(!ds||!d) return ""; const x=new Date(ds); x.setDate(x.getDate()+ +d); return x.toISOString().split("T")[0]; };
 const isOverdue = (v,e) => v && e!=="Pagado" && new Date(v)<new Date(today());
 const daysUntil = ds => { if(!ds) return null; return Math.ceil((new Date(ds)-new Date(today()))/864e5); };
+
+// Detect mes from concepto text
+const detectarMesCxP = (concepto) => {
+  const t = String(concepto||"").toUpperCase();
+  if(/\bENE\b|\bENERO\b|\bJAN\b|\bJANUARY\b/.test(t)) return "Enero";
+  if(/\bFEB\b|\bFEBRERO\b|\bFEBR\b/.test(t)) return "Febrero";
+  if(/\bMAR\b|\bMARZO\b|\bMZO\b|\bMARZ\b/.test(t)) return "Marzo";
+  if(/\bABR\b|\bABRIL\b|\bAPR\b/.test(t)) return "Abril";
+  if(/\bMAY\b|\bMAYO\b/.test(t)) return "Mayo";
+  if(/\bJUN\b|\bJUNIO\b|\bJUNE\b/.test(t)) return "Junio";
+  if(/\bJUL\b|\bJULIO\b|\bJULY\b/.test(t)) return "Julio";
+  if(/\bAGO\b|\bAGOSTO\b|\bAUG\b/.test(t)) return "Agosto";
+  if(/\bSEP\b|\bSEPT\b|\bSEPTIEMBRE\b|\bSEPTIEM\b/.test(t)) return "Septiembre";
+  if(/\bOCT\b|\bOCTUBRE\b/.test(t)) return "Octubre";
+  if(/\bNOV\b|\bNOVIEMBRE\b|\bNOVIEM\b/.test(t)) return "Noviembre";
+  if(/\bDIC\b|\bDICIEMBRE\b|\bDEC\b/.test(t)) return "Diciembre";
+  return null;
+};
 const uid = () => Math.random().toString(36).slice(2,10);
 const fmtDateShort = d => { if(!d) return ""; const [,m,dy]=d.split("-"); return `${dy}/${m}`; };
 const fmtDateLabel = d => { if(!d) return ""; const dias=["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"]; return `${dias[new Date(d+"T12:00:00").getDay()]} ${fmtDateShort(d)}`; };
@@ -85,15 +107,16 @@ const ModalShell = ({title,onClose,wide,extraWide,children}) => (
 );
 
 const KpiCard = ({label,value,sub,color=C.navy,icon,onClick}) => (
-  <div onClick={onClick} style={{background:C.surface,borderRadius:16,padding:"20px 24px",border:`1px solid ${C.border}`,boxShadow:"0 2px 8px rgba(0,0,0,.05)",flex:1,minWidth:160,cursor:onClick?"pointer":"default",transition:"transform .15s"}}
-    onMouseEnter={e=>{if(onClick)e.currentTarget.style.transform="scale(1.03)";}} onMouseLeave={e=>{e.currentTarget.style.transform="scale(1)";}}>
+  <div onClick={onClick} style={{background:"#fff",borderRadius:16,padding:"18px 22px",border:`1px solid ${C.border}`,borderLeft:`4px solid ${color}`,boxShadow:"0 2px 10px rgba(0,0,0,.06)",flex:1,minWidth:160,cursor:onClick?"pointer":"default",transition:"all .15s"}}
+    onMouseEnter={e=>{if(onClick){e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow=`0 8px 24px rgba(0,0,0,.12)`;e.currentTarget.style.borderLeftColor=color;}}}
+    onMouseLeave={e=>{e.currentTarget.style.transform="translateY(0)";e.currentTarget.style.boxShadow="0 2px 10px rgba(0,0,0,.06)";}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
       <div>
-        <div style={{fontSize:12,color:C.muted,fontWeight:600,textTransform:"uppercase",letterSpacing:.5}}>{label}</div>
-        <div style={{fontSize:26,fontWeight:800,color,marginTop:4}}>{value}</div>
-        {sub && <div style={{fontSize:12,color:C.muted,marginTop:2}}>{sub}</div>}
+        <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:.7,marginBottom:4}}>{label}</div>
+        <div style={{fontSize:24,fontWeight:900,color,lineHeight:1.1}}>{value}</div>
+        {sub && <div style={{fontSize:11,color:C.muted,marginTop:4}}>{sub}</div>}
       </div>
-      <div style={{fontSize:28}}>{icon}</div>
+      <div style={{fontSize:26,background:`${color}15`,borderRadius:10,width:42,height:42,display:"flex",alignItems:"center",justifyContent:"center"}}>{icon}</div>
     </div>
   </div>
 );
@@ -116,8 +139,14 @@ export default function CxpApp({ user, onLogout }) {
   const empresa = EMPRESAS.find(e => e.id === empresaId) || EMPRESAS[0];
   const [filters, setFilters] = useState({proveedor:"",clasificacion:"",estatus:"",fechaFrom:"",fechaTo:"",pagoFrom:"",pagoTo:""});
   const [search, setSearch] = useState("");
+  const [filtroMesConcepto, setFiltroMesConcepto] = useState("");
+  const [expandedGroups, setExpandedGroups] = useState(new Set());
+  const [grupoPickerOpenMain, setGrupoPickerOpenMain] = useState(false);
+  const grupoPickerBtnRef = React.useRef(null);
+  const [dashMesMoneda, setDashMesMoneda] = useState("MXN");
   const [carteraTab, setCarteraTab] = useState("activas"); // "activas" | "pagadas" | "resumen"
   const [filtroGrupo, setFiltroGrupo] = useState("");
+  const [filtroProveedores, setFiltroProveedores] = useState(new Set()); // multi-select
   const [grupoPor, setGrupoPor] = useState("proveedor");
   const [grupo2, setGrupo2] = useState(""); // secondary grouping
   const [modalInv, setModalInv] = useState(null);
@@ -155,6 +184,7 @@ export default function CxpApp({ user, onLogout }) {
   const [pagosFechaTo, setPagosFechaTo] = useState("");
   const fileRef = useRef();
   const searchRef = useRef();
+  const financImportRef = useRef();
 
   /* ── CxC State ──────────────────────────────────────────────────────── */
   const [ingresos, setIngresos] = useState([]);
@@ -162,17 +192,38 @@ export default function CxpApp({ user, onLogout }) {
   const [invoiceIngresos, setInvoiceIngresos] = useState([]);
   const [categoriasIngreso, setCategoriasIngreso] = useState([]);
   const [clientes, setClientes] = useState([]);
+  const [porFacturar, setPorFacturar] = useState([]);
+  const [financiamientos, setFinanciamientos] = useState([]);
+  const [financiamientoPagos, setFinanciamientoPagos] = useState([]);
+  const [financModalId, setFinancModalId] = useState(null);
+  const [financImportPreview, setFinancImportPreview] = useState(null); // [{nombre,concepto,montoMensual,fechaInicio,fechaFin,diaPago,plazos}]
+  const [financImportando, setFinancImportando] = useState(false); // which credit is open
+  const [tarjetas, setTarjetas] = useState([]);
+  const [tarjetaMovimientos, setTarjetaMovimientos] = useState([]);
+  const [tarjetaModalId, setTarjetaModalId] = useState(null);
+  const [tarjetaImportPreview, setTarjetaImportPreview] = useState(null);
+  const [tarjetaImportando, setTarjetaImportando] = useState(false);
+  const tarjetaImportRef = useRef();
+  const [editingSaldoId, setEditingSaldoId] = useState(null);
+  const [editingSaldoVal, setEditingSaldoVal] = useState("");
+  const [tarjetaFiltroInt, setTarjetaFiltroInt] = useState("");
+  const [tarjetaFiltroTipo, setTarjetaFiltroTipo] = useState("");
+  const [tarjetaFiltroMes, setTarjetaFiltroMes] = useState("");
   const [vincularModal, setVincularModal] = useState(null); // {invoiceId, proveedor, folio, total, moneda}
 
   /* ── Load data from Supabase ────────────────────────────────────── */
   useEffect(() => {
     (async () => {
       setLoading(true);
-      const [inv, sup, cls, pays, ings, cbs, invIngs, cats, clts] = await Promise.all([
+      const results = await Promise.allSettled([
         fetchInvoices(empresaId), fetchSuppliers(empresaId), fetchClasificaciones(empresaId), fetchPayments(empresaId),
         fetchIngresos(empresaId), fetchCobros(empresaId), fetchInvoiceIngresos(empresaId), fetchCategoriasIngreso(empresaId),
-        fetchClientes(empresaId),
+        fetchClientes(empresaId), fetchPorFacturar(empresaId),
+        fetchFinanciamientos(empresaId), fetchFinanciamientoPagos(empresaId),
+        fetchTarjetas(empresaId), fetchTarjetaMovimientos(empresaId),
       ]);
+      const [inv, sup, cls, pays, ings, cbs, invIngs, cats, clts, pf, fins, finPagos, tarjs, tarjMovs] =
+        results.map(r => r.status==="fulfilled" ? r.value : []);
       setInvoices(inv);
       setSuppliers(sup.length > 0 ? sup : []);
       setClases(cls.length > 0 ? cls : DEFAULT_CLASES);
@@ -182,6 +233,11 @@ export default function CxpApp({ user, onLogout }) {
       setInvoiceIngresos(invIngs);
       setCategoriasIngreso(cats);
       setClientes(clts);
+      setPorFacturar(pf);
+      setFinanciamientos(fins);
+      setFinanciamientoPagos(finPagos);
+      setTarjetas(tarjs);
+      setTarjetaMovimientos(tarjMovs);
       setLoading(false);
     })();
   }, [empresaId]);
@@ -239,6 +295,9 @@ export default function CxpApp({ user, onLogout }) {
   /* ── Derived ─────────────────────────────────────────────────────────── */
   const curInvoices = invoices[currency] || [];
 
+  // Serialize Set to string so useMemo detects changes
+  const filtroProveedoresKey = [...filtroProveedores].sort().join("|");
+
   const filtered = useMemo(() => {
     const getSupGrupo = (nombre) => suppliers.find(s=>s.nombre===nombre)?.grupo || "";
     let result = curInvoices.filter(inv => {
@@ -246,6 +305,7 @@ export default function CxpApp({ user, onLogout }) {
       if(carteraTab === "activas" && inv.estatus === "Pagado") return false;
       if(carteraTab === "pagadas" && inv.estatus !== "Pagado") return false;
       if(filters.proveedor && inv.proveedor!==filters.proveedor) return false;
+      if(filtroProveedoresKey && !filtroProveedoresKey.split("|").includes(inv.proveedor)) return false;
       if(filters.clasificacion && inv.clasificacion!==filters.clasificacion) return false;
       if(filters.estatus && inv.estatus!==filters.estatus) return false;
       if(filters.fechaFrom && inv.fecha<filters.fechaFrom) return false;
@@ -258,6 +318,10 @@ export default function CxpApp({ user, onLogout }) {
       }
       if(filtroGrupo && getSupGrupo(inv.proveedor) !== filtroGrupo) return false;
       if(search && !JSON.stringify(inv).toLowerCase().includes(search.toLowerCase())) return false;
+      if(filtroMesConcepto) {
+        if(filtroMesConcepto === "__sin_mes__") { if(detectarMesCxP(inv.concepto)!==null) return false; }
+        else { if(detectarMesCxP(inv.concepto) !== filtroMesConcepto) return false; }
+      }
       return true;
     });
     if(sortCol) {
@@ -276,7 +340,7 @@ export default function CxpApp({ user, onLogout }) {
       });
     }
     return result;
-  }, [curInvoices, filters, search, sortCol, sortDir, carteraTab, filtroGrupo, suppliers]);
+  }, [curInvoices, filters, search, sortCol, sortDir, carteraTab, filtroGrupo, filtroProveedoresKey, suppliers, filtroMesConcepto]);
 
   const kpis = useMemo(() => {
     const allInvs = [...invoices.MXN,...invoices.USD,...invoices.EUR];
@@ -737,44 +801,44 @@ export default function CxpApp({ user, onLogout }) {
         <td style={{padding:"10px 4px",textAlign:"center",width:32}}>
           <input type="checkbox" checked={selectedIds.has(inv.id)} onChange={()=>toggleSelect(inv.id)} style={{cursor:"pointer",width:16,height:16,accentColor:C.blue}}/>
         </td>
-        <td style={{padding:"10px 8px"}}>{inv.tipo}</td>
-        <td style={{padding:"10px 8px",whiteSpace:"nowrap"}}>{inv.fecha}</td>
+        <td style={{padding:"11px 8px",fontSize:14}}>{inv.tipo}</td>
+        <td style={{padding:"11px 8px",whiteSpace:"nowrap",fontSize:14}}>{inv.fecha}</td>
         {/* Folio — red if duplicate */}
-        <td style={{padding:"10px 8px",background:isDupe?"#FFEBEE":"transparent",color:isDupe?C.danger:C.text,fontWeight:isDupe?700:400,borderLeft:isDupe?`3px solid ${C.danger}`:"none"}}>
+        <td style={{padding:"11px 8px",background:isDupe?"#FFEBEE":"transparent",color:isDupe?C.danger:C.text,fontWeight:isDupe?700:600,fontSize:14,borderLeft:isDupe?`3px solid ${C.danger}`:"none"}}>
           {inv.serie}{inv.folio}
-          {isDupe && <span style={{fontSize:10,marginLeft:4}} title="Folio duplicado">⚠️</span>}
+          {isDupe && <span style={{fontSize:11,marginLeft:4}} title="Folio duplicado">⚠️</span>}
         </td>
-        <td style={{padding:"10px 8px",fontWeight:600,maxWidth:130,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{inv.proveedor}</td>
+        <td style={{padding:"11px 8px",fontWeight:700,fontSize:14,maxWidth:130,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{inv.proveedor}</td>
         {/* Concepto — editable inline */}
-        <td style={{padding:"10px 8px",minWidth:120,maxWidth:180}} onClick={()=>{if(!esConsulta&&!editingConcepto){setEditingConcepto(true);setTempConcepto(inv.concepto||"");}}}>
+        <td style={{padding:"11px 8px",minWidth:120,maxWidth:180}} onClick={()=>{if(!esConsulta&&!editingConcepto){setEditingConcepto(true);setTempConcepto(inv.concepto||"");}}}>
           {editingConcepto ? (
             <input autoFocus value={tempConcepto} onChange={e=>setTempConcepto(e.target.value)}
               onBlur={()=>{updateConcepto(inv.id,tempConcepto);setEditingConcepto(false);}}
               onKeyDown={e=>{if(e.key==="Enter"){updateConcepto(inv.id,tempConcepto);setEditingConcepto(false);}if(e.key==="Escape")setEditingConcepto(false);}}
-              style={{...inputStyle,padding:"4px 8px",fontSize:12,width:"100%"}} />
+              style={{...inputStyle,padding:"4px 8px",fontSize:13,width:"100%"}} />
           ) : (
-            <span style={{cursor:"pointer",color:inv.concepto?C.text:C.muted,fontSize:12,fontStyle:inv.concepto?"normal":"italic",display:"block",minHeight:20,padding:"4px 0",borderBottom:`1px dashed ${C.border}`}}>
+            <span style={{cursor:"pointer",color:inv.concepto?C.text:C.muted,fontSize:13,fontStyle:inv.concepto?"normal":"italic",display:"block",minHeight:20,padding:"4px 0",borderBottom:`1px dashed ${C.border}`}}>
               {inv.concepto || (esConsulta ? "—" : "Clic para agregar…")}
             </span>
           )}
         </td>
         {/* Clasificación — editable inline with dropdown */}
-        <td style={{padding:"10px 8px",minWidth:100}} onClick={()=>{if(!editingClasif) setEditingClasif(true);}}>
+        <td style={{padding:"11px 8px",minWidth:100}} onClick={()=>{if(!editingClasif) setEditingClasif(true);}}>
           {editingClasif ? (
             <select autoFocus value={inv.clasificacion} onChange={e=>{updateClasificacion(inv.id,e.target.value);setEditingClasif(false);}}
               onBlur={()=>setEditingClasif(false)}
-              style={{...selectStyle,padding:"4px 6px",fontSize:12,width:"100%"}}>
+              style={{...selectStyle,padding:"4px 6px",fontSize:13,width:"100%"}}>
               {clases.map(c=><option key={c}>{c}</option>)}
             </select>
           ) : (
-            <span style={{background:"#EEF2FF",color:C.blue,padding:"2px 8px",borderRadius:20,fontSize:11,fontWeight:600,cursor:"pointer",display:"inline-block",borderBottom:`1px dashed ${C.blue}44`}}>{inv.clasificacion}</span>
+            <span style={{background:"#EEF2FF",color:C.blue,padding:"2px 8px",borderRadius:20,fontSize:12,fontWeight:600,cursor:"pointer",display:"inline-block",borderBottom:`1px dashed ${C.blue}44`}}>{inv.clasificacion}</span>
           )}
         </td>
-        <td style={{padding:"10px 8px",fontWeight:700}}>${fmt(inv.total)}</td>
-        <td style={{padding:"10px 8px",fontWeight:600,color:pagado>0?C.ok:C.muted}}>${fmt(pagado)}</td>
-        <td style={{padding:"10px 8px",fontWeight:700,color:saldo>0?(overdue?C.danger:C.warn):C.ok}}>${fmt(saldo)}</td>
+        <td style={{padding:"11px 8px",fontWeight:700,fontSize:15}}>${fmt(inv.total)}</td>
+        <td style={{padding:"11px 8px",fontWeight:600,fontSize:15,color:pagado>0?C.ok:C.muted}}>${fmt(pagado)}</td>
+        <td style={{padding:"11px 8px",fontWeight:700,fontSize:15,color:saldo>0?(overdue?C.danger:C.warn):C.ok}}>${fmt(saldo)}</td>
         {/* Pago/Programación — informativo desde tabla payments */}
-        <td style={{padding:"10px 8px",whiteSpace:"nowrap",fontSize:11}}>
+        <td style={{padding:"11px 8px",whiteSpace:"nowrap",fontSize:12}}>
           {(()=>{
             const invPays = paymentsFor(inv.id);
             const lastRealized = invPays.filter(p=>p.tipo==='realizado').sort((a,b)=>b.fechaPago.localeCompare(a.fechaPago))[0];
@@ -786,25 +850,25 @@ export default function CxpApp({ user, onLogout }) {
             return <span style={{color:C.muted}}>—</span>;
           })()}
         </td>
-        <td style={{padding:"10px 8px",whiteSpace:"nowrap",color:overdue?C.danger:C.text}}>{inv.vencimiento||"—"}</td>
-        <td style={{padding:"10px 8px",whiteSpace:"nowrap"}}>
-          {days===null ? <span style={{color:C.muted}}>—</span> : days >= 0 ? (
+        <td style={{padding:"11px 8px",whiteSpace:"nowrap",fontSize:14,color:overdue?C.danger:C.text}}>{inv.vencimiento||"—"}</td>
+        <td style={{padding:"11px 8px",whiteSpace:"nowrap"}}>
+          {inv.estatus === "Pagado" || days===null ? <span style={{color:C.muted}}>—</span> : days >= 0 ? (
             <span style={{
               background: days<=7?"#FFF3E0":days<=30?"#FFFDE7":"#E8F5E9",
               color: days<=7?C.warn:days<=30?"#F57F17":C.ok,
-              fontWeight:700, fontSize:11, padding:"2px 8px", borderRadius:20, whiteSpace:"nowrap"
+              fontWeight:700, fontSize:13, padding:"3px 9px", borderRadius:20, whiteSpace:"nowrap"
             }}>{days}d</span>
           ) : (
             <span style={{
               background: Math.abs(days)<=7?"#FFF5F5":Math.abs(days)<=15?"#FFEBEE":Math.abs(days)<=30?"#FFCDD2":Math.abs(days)<=60?"#EF9A9A":"#E57373",
               color: Math.abs(days)<=7?"#E57373":Math.abs(days)<=15?C.danger:Math.abs(days)<=30?"#C62828":Math.abs(days)<=60?"#B71C1C":"#7F0000",
-              fontWeight:800, fontSize:11, padding:"2px 8px", borderRadius:20, whiteSpace:"nowrap"
+              fontWeight:800, fontSize:13, padding:"3px 9px", borderRadius:20, whiteSpace:"nowrap"
             }}>{Math.abs(days)}d venc.</span>
           )}
         </td>
-        <td style={{padding:"10px 8px"}}>
+        <td style={{padding:"11px 8px"}}>
           <select value={inv.estatus} onChange={e=>!esConsulta&&updateEstatus(inv.id,e.target.value)} disabled={esConsulta}
-            style={{padding:"3px 8px",borderRadius:20,border:`2px solid ${statusColor(inv.estatus)}`,background:`${statusColor(inv.estatus)}22`,color:statusColor(inv.estatus),fontWeight:700,fontSize:12,cursor:"pointer"}}>
+            style={{padding:"4px 9px",borderRadius:20,border:`2px solid ${statusColor(inv.estatus)}`,background:`${statusColor(inv.estatus)}22`,color:statusColor(inv.estatus),fontWeight:700,fontSize:13,cursor:"pointer"}}>
             {["Pendiente","Pagado","Vencido","Parcial"].map(s=><option key={s}>{s}</option>)}
           </select>
         </td>
@@ -855,7 +919,7 @@ export default function CxpApp({ user, onLogout }) {
                 {[
                   {h:"Tipo",col:"tipo"},{h:"Fecha",col:"fecha"},{h:"Folio",col:"folio"},{h:"Proveedor",col:"proveedor"},
                   {h:"Concepto",col:"concepto"},{h:"Clasif.",col:"clasificacion"},{h:"Total",col:"total"},{h:"Pagado",col:"montoPagado"},
-                  {h:"Saldo",col:"saldo"},{h:"Pago/Prog.",col:""},{h:"Vence",col:"vencimiento"},{h:"Días",col:"dias"},
+                  {h:"Saldo Total",col:"saldo"},{h:"Pago/Prog.",col:""},{h:"Vence",col:"vencimiento"},{h:"Días",col:"dias"},
                   {h:"Estatus",col:"estatus"},{h:"VoBo",col:""},{h:"Aut.Dir.",col:""},{h:"Acciones",col:""}
                 ].map(({h,col})=>(
                   <th key={h} onClick={col?()=>{if(sortCol===col) setSortDir(d=>d==="asc"?"desc":"asc"); else {setSortCol(col);setSortDir("asc");}}:undefined}
@@ -891,174 +955,314 @@ export default function CxpApp({ user, onLogout }) {
 
   /* ── DASHBOARD ──────────────────────────────────────────────────────── */
   const renderDashboard = () => {
-    const pieData = [{name:"MXN",value:kpis.totalMXN,color:C.mxn},{name:"USD",value:kpis.totalUSD,color:C.usd},{name:"EUR",value:kpis.totalEUR,color:C.eur}].filter(d=>d.value>0);
-    const claseData = Object.entries(
-      [...invoices.MXN,...invoices.USD,...invoices.EUR].filter(i=>i.estatus!=="Pagado")
-        .reduce((acc,inv)=>{ acc[inv.clasificacion]=(acc[inv.clasificacion]||0)+((+inv.total||0)-(+inv.montoPagado||0)); return acc; },{})
-    ).map(([name,value])=>({name,value})).filter(d=>d.value>0).sort((a,b)=>b.value-a.value);
-
     const allInvs = [...invoices.MXN.map(i=>({...i,moneda:"MXN"})),...invoices.USD.map(i=>({...i,moneda:"USD"})),...invoices.EUR.map(i=>({...i,moneda:"EUR"}))];
     const pendAll = allInvs.filter(i=>i.estatus!=="Pagado"&&((+i.total||0)-(+i.montoPagado||0))>0);
     const saldoOf = i => (+i.total||0)-(+i.montoPagado||0);
     const daysOf = i => daysUntil(i.vencimiento);
-    // Per currency helpers
     const pendByCur = cur => pendAll.filter(i=>i.moneda===cur);
-    const vigByCur = cur => pendByCur(cur).filter(i=>!isOverdue(i.vencimiento,i.estatus));
-    const vencByCur = cur => pendByCur(cur).filter(i=>isOverdue(i.vencimiento,i.estatus));
     const sumSaldo = arr => arr.reduce((s,i)=>s+saldoOf(i),0);
-    // Aging buckets (based on days until vencimiento)
-    const corriente7 = pendAll.filter(i=>{ const d=daysOf(i); return d!==null && d>=0 && d<=7; });
-    const corriente15 = pendAll.filter(i=>{ const d=daysOf(i); return d!==null && d>7 && d<=15; });
-    const corriente30 = pendAll.filter(i=>{ const d=daysOf(i); return d!==null && d>15 && d<=30; });
-    const corrienteMas30 = pendAll.filter(i=>{ const d=daysOf(i); return d!==null && d>30; });
-    const vencido7 = pendAll.filter(i=>{ const d=daysOf(i); return d!==null && d<0 && d>=-7; });
-    const vencido15 = pendAll.filter(i=>{ const d=daysOf(i); return d!==null && d<-7 && d>=-15; });
-    const vencido30 = pendAll.filter(i=>{ const d=daysOf(i); return d!==null && d<-15 && d>=-30; });
-    const vencido60 = pendAll.filter(i=>{ const d=daysOf(i); return d!==null && d<-30 && d>=-60; });
-    const vencidoMas60 = pendAll.filter(i=>{ const d=daysOf(i); return d!==null && d<-60; });
-    const openDetail = (title, items) => { setDashSearch(""); setDashFilterProv(""); setDashFilterClasif(""); setDashFilterEstatus(""); setDashGroupBy(""); setDashSelectedIds(new Set()); setDashBulkAutDir(""); setDashDetail({title, type:"invoices", items}); };
+
+    const openDetailGrouped = (title, items) => {
+      setDashSearch(""); setDashFilterProv(""); setDashFilterClasif(""); setDashFilterEstatus(""); setDashGroupBy(""); setDashSelectedIds(new Set()); setDashBulkAutDir("");
+      setDashDetail({title, type:"invoices", items, grouped:true});
+    };
+
+    // Aging buckets
+    const corriente   = pendAll.filter(i=>{ const d=daysOf(i); return d===null||d>=0; });
+    const vencido7    = pendAll.filter(i=>{ const d=daysOf(i); return d!==null&&d<0&&d>=-7; });
+    const vencido15   = pendAll.filter(i=>{ const d=daysOf(i); return d!==null&&d<-7&&d>=-15; });
+    const vencido30   = pendAll.filter(i=>{ const d=daysOf(i); return d!==null&&d<-15&&d>=-30; });
+    const vencido60   = pendAll.filter(i=>{ const d=daysOf(i); return d!==null&&d<-30&&d>=-60; });
+    const vencidoMas60= pendAll.filter(i=>{ const d=daysOf(i); return d!==null&&d<-60; });
+
+    // Semáforo
+    const totalPend = sumSaldo(pendAll);
+    const totalVenc = sumSaldo(pendAll.filter(i=>isOverdue(i.vencimiento,i.estatus)));
+    const pctVenc = totalPend>0?(totalVenc/totalPend)*100:0;
+    const saludColor = pctVenc<20?"#2E7D32":pctVenc<50?"#F57F17":"#C62828";
+    const saludBg    = pctVenc<20?"#E8F5E9":pctVenc<50?"#FFF8E1":"#FFEBEE";
+    const saludIcon  = pctVenc<20?"🟢":pctVenc<50?"🟡":"🔴";
+    const saludLabel = pctVenc<20?"Saludable":pctVenc<50?"Moderado":"Atención";
+
+    // CxP por Clasificación — por moneda
+    const clasifByCur = (cur) => Object.entries(
+      pendAll.filter(i=>i.moneda===cur).reduce((acc,i)=>{ const c=i.clasificacion||"Sin clasificar"; acc[c]=(acc[c]||{sum:0,items:[]}); acc[c].sum+=saldoOf(i); acc[c].items.push(i); return acc; },{})
+    ).sort((a,b)=>b[1].sum-a[1].sum);
+    const clasifDataMXN = clasifByCur("MXN");
+    const clasifDataUSD = clasifByCur("USD");
+    const clasifColors = ["#4527A0","#6A1B9A","#7B1FA2","#8E24AA","#AB47BC","#BA68C8","#CE93D8","#9575CD","#5E35B1","#7E57C2"];
+
+    // Por Mes × Clasificación — usa dashMesMoneda
+    const MESES_ORDER = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+    const MESES_PREV_YEAR = ["Noviembre","Diciembre"]; // si hay meses de año actual, estos son del año anterior
+    const pendMesMoneda = pendAll.filter(i=>i.moneda===dashMesMoneda);
+    const mesClasiMap = {};
+    const sinMesItems = []; // facturas sin mes detectable en concepto
+    pendMesMoneda.forEach(i=>{
+      const mes = detectarMesCxP(i.concepto);
+      if(!mes) { sinMesItems.push(i); return; }
+      const clas = i.clasificacion||"Sin clasificar";
+      if(!mesClasiMap[mes]) mesClasiMap[mes]={};
+      if(!mesClasiMap[mes][clas]) mesClasiMap[mes][clas]={sum:0,items:[]};
+      mesClasiMap[mes][clas].sum+=saldoOf(i);
+      mesClasiMap[mes][clas].items.push(i);
+    });
+    const mesesRaw = MESES_ORDER.filter(m=>mesClasiMap[m]);
+    // If we have "current year" months (Jan-Oct) AND "prev year" months (Nov-Dec), reorder
+    const hayMesesActuales = mesesRaw.some(m=>!MESES_PREV_YEAR.includes(m));
+    const mesesPresentes = hayMesesActuales
+      ? [...mesesRaw.filter(m=>MESES_PREV_YEAR.includes(m)), ...mesesRaw.filter(m=>!MESES_PREV_YEAR.includes(m))]
+      : mesesRaw;
+    const clasifPresentes = [...new Set(pendMesMoneda.filter(i=>detectarMesCxP(i.concepto)).map(i=>i.clasificacion||"Sin clasificar"))];
 
     return (
       <div>
-        <h1 style={{fontSize:24,fontWeight:800,color:C.navy,marginBottom:4}}>Dashboard General</h1>
-        <p style={{color:C.muted,marginBottom:20,fontSize:14}}>Haz clic en cualquier tarjeta para ver el detalle</p>
-        {/* Row 1: Saldo total por moneda */}
-        <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:16}}>
-          <KpiCard label="Saldo MXN" value={`$${fmt(kpis.totalMXN)}`} sub="Pendiente de pago" color={C.mxn} icon="🇲🇽"
-            onClick={()=>openDetail("Saldo Pendiente MXN",pendByCur("MXN"))}/>
-          <KpiCard label="Saldo USD" value={`$${fmt(kpis.totalUSD)}`} sub="Pendiente de pago" color={C.usd} icon="🇺🇸"
-            onClick={()=>openDetail("Saldo Pendiente USD",pendByCur("USD"))}/>
-          <KpiCard label="Saldo EUR" value={`€${fmt(kpis.totalEUR)}`} sub="Pendiente de pago" color={C.eur} icon="🇪🇺"
-            onClick={()=>openDetail("Saldo Pendiente EUR",pendByCur("EUR"))}/>
-          <KpiCard label="Facturas Vencidas" value={kpis.vencidas} sub="Requieren atención" color={C.danger} icon="⚠️"
-            onClick={()=>openDetail("Facturas Vencidas",pendAll.filter(i=>isOverdue(i.vencimiento,i.estatus)))}/>
-          <KpiCard label="Total Facturas" value={kpis.facturas} color={C.sky} icon="🧾"
-            onClick={()=>openDetail("Todas las Facturas",allInvs)}/>
-          <KpiCard label="Proveedores" value={kpis.proveedores} sub="Activos" color={C.teal} icon="🏢"
-            onClick={()=>{setDashSearch("");setDashFilterProv("");setDashFilterClasif("");setDashFilterEstatus("");setDashGroupBy("");setDashDetail({title:"Proveedores Activos",type:"suppliers",items:suppliers.filter(s=>s.activo)});}}/>
+        {/* ── Header + Semáforo ── */}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20,flexWrap:"wrap",gap:12}}>
+          <div>
+            <h1 style={{fontSize:24,fontWeight:800,color:C.navy,margin:0}}>Dashboard General</h1>
+            <p style={{color:C.muted,marginTop:4,fontSize:14}}>Haz clic en cualquier tarjeta para ver el detalle</p>
+          </div>
+          <div style={{background:saludBg,border:`2px solid ${saludColor}`,borderRadius:14,padding:"12px 20px",display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:24}}>{saludIcon}</span>
+            <div>
+              <div style={{fontWeight:800,fontSize:15,color:saludColor}}>Salud: {saludLabel}</div>
+              <div style={{fontSize:12,color:saludColor,opacity:.8}}>{pctVenc.toFixed(1)}% del saldo vencido</div>
+            </div>
+          </div>
         </div>
-        {/* Row 2: Vigente / Vencido por moneda */}
-        <h3 style={{fontSize:14,fontWeight:700,color:C.navy,marginBottom:10}}>Vigente vs Vencido por Moneda</h3>
-        <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:20}}>
+
+        {/* ── KPI Cards ── */}
+        <div style={{display:"flex",gap:14,flexWrap:"wrap",marginBottom:24}}>
+          <KpiCard label="Saldo MXN" value={`$${fmt(kpis.totalMXN)}`} sub="Pendiente de pago" color={C.mxn} icon="🇲🇽" onClick={()=>openDetailGrouped("Saldo Pendiente MXN",pendByCur("MXN"))}/>
+          <KpiCard label="Saldo USD" value={`$${fmt(kpis.totalUSD)}`} sub="Pendiente de pago" color={C.usd} icon="🇺🇸" onClick={()=>openDetailGrouped("Saldo Pendiente USD",pendByCur("USD"))}/>
+          <KpiCard label="Saldo EUR" value={`€${fmt(kpis.totalEUR)}`} sub="Pendiente de pago" color={C.eur} icon="🇪🇺" onClick={()=>openDetailGrouped("Saldo Pendiente EUR",pendByCur("EUR"))}/>
+          <KpiCard label="Facturas Vencidas" value={kpis.vencidas} sub="Requieren atención" color={C.danger} icon="⚠️" onClick={()=>openDetailGrouped("Facturas Vencidas",pendAll.filter(i=>isOverdue(i.vencimiento,i.estatus)))}/>
+          <KpiCard label="Total Facturas" value={kpis.facturas} color={C.sky} icon="🧾" onClick={()=>openDetailGrouped("Todas las Facturas",allInvs)}/>
+          <KpiCard label="Proveedores" value={kpis.proveedores} sub="Activos" color={C.teal} icon="🏢" onClick={()=>{setDashSearch("");setDashFilterProv("");setDashFilterClasif("");setDashFilterEstatus("");setDashGroupBy("");setDashDetail({title:"Proveedores Activos",type:"suppliers",items:suppliers.filter(s=>s.activo)});}}/>
+        </div>
+
+        {/* ── Antigüedad de Saldos ── */}
+        <div style={{background:"#fff",border:`1px solid ${C.border}`,borderRadius:18,padding:24,marginBottom:24,boxShadow:"0 2px 12px rgba(0,0,0,.05)"}}>
+          <h2 style={{fontSize:17,fontWeight:800,color:C.navy,marginBottom:20,margin:"0 0 20px",display:"flex",alignItems:"center",gap:8}}>
+            📊 Antigüedad de Saldos
+          </h2>
           {["MXN","USD","EUR"].map(cur=>{
-            const vig=vigByCur(cur); const ven=vencByCur(cur);
-            const vigSum=sumSaldo(vig); const venSum=sumSaldo(ven);
-            if(vigSum===0&&venSum===0) return null;
-            const sym=cur==="EUR"?"€":"$"; const flag={MXN:"🇲🇽",USD:"🇺🇸",EUR:"🇪🇺"}[cur];
-            return (
-              <div key={cur} style={{display:"flex",gap:8}}>
-                <div onClick={()=>openDetail(`${cur} Vigente`,vig)} style={{background:"#E8F5E9",border:"1px solid #A5D6A7",borderRadius:12,padding:"12px 18px",cursor:"pointer",minWidth:140,transition:"transform .15s"}}
-                  onMouseEnter={e=>{e.currentTarget.style.transform="scale(1.03)";}} onMouseLeave={e=>{e.currentTarget.style.transform="scale(1)";}}>
-                  <div style={{fontSize:11,color:C.muted,fontWeight:600}}>{flag} {cur} VIGENTE</div>
-                  <div style={{fontSize:20,fontWeight:800,color:C.ok}}>{sym}{fmt(vigSum)}</div>
-                  <div style={{fontSize:11,color:C.muted}}>{vig.length} fact.</div>
+            const curItems = pendAll.filter(i=>i.moneda===cur);
+            if(!curItems.length) return null;
+            const sym = cur==="EUR"?"€":"$";
+            const flag = {MXN:"🇲🇽",USD:"🇺🇸",EUR:"🇪🇺"}[cur];
+            const curColor = {MXN:C.mxn,USD:C.usd,EUR:C.eur}[cur];
+            const filterCur = arr=>arr.filter(i=>i.moneda===cur);
+            const totalCur = sumSaldo(curItems);
+            const agingChips = [
+              {l:"Corriente",         v:sumSaldo(filterCur(corriente)),    c:"#1B5E20", bg:"#E8F5E9", border:"#81C784", items:filterCur(corriente)},
+              {l:"Vencido 1-7 Días",  v:sumSaldo(filterCur(vencido7)),    c:"#BF360C", bg:"#FFF3E0", border:"#FFB74D", items:filterCur(vencido7)},
+              {l:"Vencido 8-15 Días", v:sumSaldo(filterCur(vencido15)),   c:"#7F0000", bg:"#FFCCBC", border:"#FF7043", items:filterCur(vencido15)},
+              {l:"Vencido 16-30 Días",v:sumSaldo(filterCur(vencido30)),   c:"#7F0000", bg:"#FFCDD2", border:"#EF9A9A", items:filterCur(vencido30)},
+              {l:"Vencido 31-60 Días",v:sumSaldo(filterCur(vencido60)),   c:"#4A0000", bg:"#EF9A9A", border:"#E57373", items:filterCur(vencido60)},
+              {l:"Vencido +60 Días",  v:sumSaldo(filterCur(vencidoMas60)),c:"#fff",    bg:"#C62828", border:"#B71C1C", items:filterCur(vencidoMas60)},
+            ].filter(ch=>ch.v>0);
+            return(
+              <div key={cur} style={{marginBottom:cur!=="EUR"?20:0}}>
+                {/* Moneda header */}
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
+                  <span style={{fontSize:18}}>{flag}</span>
+                  <span style={{fontSize:16,fontWeight:900,color:curColor}}>{cur}</span>
+                  <span style={{fontSize:13,color:C.muted}}>· Saldo total: {sym}{fmt(totalCur)} · {curItems.length} facturas</span>
+                  {/* Progress bar inline */}
+                  <div style={{flex:1,height:8,borderRadius:4,background:"#EEF2FF",overflow:"hidden",maxWidth:300,marginLeft:8}}>
+                    <div style={{height:"100%",width:`${totalCur>0?(sumSaldo(filterCur(corriente))/totalCur)*100:0}%`,background:"#43A047",borderRadius:4,transition:"width .5s"}}/>
+                  </div>
+                  <span style={{fontSize:11,color:C.muted}}>{totalCur>0?((sumSaldo(filterCur(corriente))/totalCur)*100).toFixed(0):0}% corriente</span>
                 </div>
-                <div onClick={()=>openDetail(`${cur} Vencido`,ven)} style={{background:"#FFEBEE",border:"1px solid #EF9A9A",borderRadius:12,padding:"12px 18px",cursor:"pointer",minWidth:140,transition:"transform .15s"}}
-                  onMouseEnter={e=>{e.currentTarget.style.transform="scale(1.03)";}} onMouseLeave={e=>{e.currentTarget.style.transform="scale(1)";}}>
-                  <div style={{fontSize:11,color:C.muted,fontWeight:600}}>{flag} {cur} VENCIDO</div>
-                  <div style={{fontSize:20,fontWeight:800,color:C.danger}}>{sym}{fmt(venSum)}</div>
-                  <div style={{fontSize:11,color:C.muted}}>{ven.length} fact.</div>
+                {/* Chips grandes */}
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:12}}>
+                  {agingChips.map(ch=>(
+                    <div key={ch.l} onClick={()=>openDetailGrouped(`${cur} — ${ch.l}`,ch.items)}
+                      style={{background:ch.bg,border:`2px solid ${ch.border}`,borderRadius:16,padding:"18px 20px",cursor:"pointer",boxShadow:"0 2px 6px rgba(0,0,0,.06)"}}>
+                      <div style={{fontSize:10,color:ch.c,fontWeight:700,textTransform:"uppercase",marginBottom:6,letterSpacing:.8,opacity:.9}}>{ch.l}</div>
+                      <div style={{fontSize:22,fontWeight:900,color:ch.c,lineHeight:1}}>{sym}{fmt(ch.v)}</div>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:8}}>
+                        <span style={{fontSize:11,color:ch.c,fontWeight:600}}>{ch.items.length} fact.</span>
+                        <span style={{fontSize:11,color:ch.c,fontWeight:600}}>{totalCur>0?((ch.v/totalCur)*100).toFixed(0):0}%</span>
+                      </div>
+                      <div style={{height:3,borderRadius:2,background:`${ch.border}50`,marginTop:8,overflow:"hidden"}}>
+                        <div style={{height:"100%",width:`${totalCur>0?(ch.v/totalCur)*100:0}%`,background:ch.border,borderRadius:2}}/>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* ── CxP por Clasificación ── */}
+        <div style={{background:"#fff",border:`1px solid ${C.border}`,borderRadius:18,padding:24,marginBottom:24,boxShadow:"0 2px 12px rgba(0,0,0,.05)"}}>
+          <h2 style={{fontSize:17,fontWeight:800,color:C.navy,margin:"0 0 20px",display:"flex",alignItems:"center",gap:8}}>
+            🗂️ Saldo por Clasificación
+          </h2>
+          {[{cur:"MXN",flag:"🇲🇽",data:clasifDataMXN,sym:"$"},{cur:"USD",flag:"🇺🇸",data:clasifDataUSD,sym:"$"}].map(({cur,flag,data,sym})=>{
+            if(!data.length) return null;
+            const maxVal = data[0]?.[1]?.sum||1;
+            const totalCur = data.reduce((s,[,{sum}])=>s+sum,0);
+            return(
+              <div key={cur} style={{marginBottom:24}}>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,padding:"12px 16px",background:{MXN:"#F3E5F5",USD:"#E8F5E9"}[cur],borderRadius:12,border:`1px solid ${{MXN:"#CE93D8",USD:"#A5D6A7"}[cur]}`}}>
+                  <span style={{fontSize:22}}>{flag}</span>
+                  <span style={{fontSize:20,fontWeight:900,color:{MXN:"#6A1B9A",USD:"#2E7D32"}[cur]}}>{cur}</span>
+                  <span style={{fontSize:14,color:{MXN:"#7B1FA2",USD:"#388E3C"}[cur],fontWeight:600}}>· Total: <b>{sym}{fmt(totalCur)}</b></span>
+                  <span style={{marginLeft:4,fontSize:12,color:{MXN:"#9C27B0",USD:"#43A047"}[cur]}}>{data.length} clasificaciones</span>
+                </div>
+                <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                  {data.map(([clas,{sum,items}],idx)=>{
+                    const pct = maxVal>0?(sum/maxVal)*100:0;
+                    const pctTotal = totalCur>0?(sum/totalCur)*100:0;
+                    const color = clasifColors[idx%clasifColors.length];
+                    return(
+                      <div key={clas} onClick={()=>openDetailGrouped(`${clas} (${cur})`,items)}
+                        style={{cursor:"pointer",padding:"12px 16px",borderRadius:12,border:`1px solid ${C.border}`,background:"#FAFBFC",transition:"all .15s"}}
+                        onMouseEnter={e=>{e.currentTarget.style.background="#F0F7FF";e.currentTarget.style.borderColor=color;e.currentTarget.style.transform="translateX(4px)";}}
+                        onMouseLeave={e=>{e.currentTarget.style.background="#FAFBFC";e.currentTarget.style.borderColor=C.border;e.currentTarget.style.transform="translateX(0)";}}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                          <div style={{display:"flex",alignItems:"center",gap:10}}>
+                            <div style={{width:12,height:12,borderRadius:3,background:color,flexShrink:0}}/>
+                            <span style={{fontWeight:700,fontSize:15,color:C.navy}}>{clas}</span>
+                            <span style={{fontSize:12,color:C.muted}}>{items.length} factura{items.length!==1?"s":""}</span>
+                          </div>
+                          <div style={{display:"flex",alignItems:"center",gap:12}}>
+                            <span style={{fontSize:11,color:C.muted,background:"#EEF2FF",padding:"2px 8px",borderRadius:20,fontWeight:600}}>{pctTotal.toFixed(1)}% del total</span>
+                            <span style={{fontWeight:900,fontSize:18,color}}>{sym}{fmt(sum)}</span>
+                            <span style={{fontSize:11,background:{MXN:"#E3F2FD",USD:"#E8F5E9"}[cur],color:{MXN:"#1565C0",USD:"#2E7D32"}[cur],padding:"2px 8px",borderRadius:20,fontWeight:700}}>{flag} {cur}</span>
+                          </div>
+                        </div>
+                        <div style={{height:10,borderRadius:6,background:"#EDE7F6",overflow:"hidden"}}>
+                          <div style={{height:"100%",width:`${pct}%`,background:color,borderRadius:6,transition:"width .6s ease"}}/>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             );
           })}
         </div>
-        {/* Row 3: Aging — per currency */}
-        <h3 style={{fontSize:14,fontWeight:700,color:C.navy,marginBottom:10}}>Antigüedad de Saldos</h3>
-        {["MXN","USD","EUR"].map(cur => {
-          const curItems = pendAll.filter(i=>i.moneda===cur);
-          if(curItems.length===0) return null;
-          const sym = cur==="EUR"?"€":"$";
-          const flag = {MXN:"🇲🇽",USD:"🇺🇸",EUR:"🇪🇺"}[cur];
-          const curColor = {MXN:C.mxn,USD:C.usd,EUR:C.eur}[cur];
-          const curBg = {MXN:"#E3F2FD",USD:"#E8F5E9",EUR:"#F3E5F5"}[cur];
-          const curBorder = {MXN:"#90CAF9",USD:"#A5D6A7",EUR:"#CE93D8"}[cur];
-          const filterCur = arr => arr.filter(i=>i.moneda===cur);
-          const corrBuckets = [
-            {label:`Corriente 0-7 Días`,items:filterCur(corriente7),bg:"#E8F5E9",border:"#A5D6A7",color:C.ok},
-            {label:`Corriente 8-15 Días`,items:filterCur(corriente15),bg:"#E8F5E9",border:"#A5D6A7",color:C.ok},
-            {label:`Corriente 16-30 Días`,items:filterCur(corriente30),bg:"#FFF8E1",border:"#FFE082",color:"#F57F17"},
-            {label:`Corriente +30 Días`,items:filterCur(corrienteMas30),bg:"#FFF3E0",border:"#FFCC80",color:C.warn},
-          ];
-          const vencBuckets = [
-            {label:`Vencido 1-7 Días`,items:filterCur(vencido7),bg:"#FFF5F5",border:"#FFCDD2",color:"#E57373"},
-            {label:`Vencido 8-15 Días`,items:filterCur(vencido15),bg:"#FFEBEE",border:"#EF9A9A",color:C.danger},
-            {label:`Vencido 16-30 Días`,items:filterCur(vencido30),bg:"#FFEBEE",border:"#EF9A9A",color:C.danger},
-            {label:`Vencido 31-60 Días`,items:filterCur(vencido60),bg:"#FFCDD2",border:"#E57373",color:"#C62828"},
-            {label:`Vencido +60 Días`,items:filterCur(vencidoMas60),bg:"#FFCDD2",border:"#E57373",color:"#B71C1C"},
-          ];
-          const AgingCard = ({b}) => (
-            <div onClick={()=>openDetail(`${cur} — ${b.label}`,b.items)} style={{background:b.bg,border:`1px solid ${b.border}`,borderRadius:12,padding:"10px 12px",cursor:b.items.length>0?"pointer":"default",transition:"transform .15s",opacity:b.items.length>0?1:0.5}}
-              onMouseEnter={e=>{if(b.items.length>0)e.currentTarget.style.transform="scale(1.03)";}} onMouseLeave={e=>{e.currentTarget.style.transform="scale(1)";}}>
-              <div style={{fontSize:9,fontWeight:700,color:C.muted,textTransform:"uppercase",marginBottom:3}}>{b.label}</div>
-              <div style={{fontSize:16,fontWeight:800,color:b.items.length>0?b.color:C.muted}}>{sym}{fmt(sumSaldo(b.items))}</div>
-              <div style={{fontSize:10,color:C.muted}}>{b.items.length} fact.</div>
-            </div>
-          );
-          return (
-            <div key={cur} style={{background:curBg,border:`2px solid ${curBorder}`,borderRadius:16,padding:16,marginBottom:14}}>
-              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
-                <span style={{fontSize:18}}>{flag}</span>
-                <span style={{fontSize:15,fontWeight:800,color:curColor}}>{cur}</span>
-                <span style={{fontSize:12,color:C.muted}}>— Saldo total: {sym}{fmt(sumSaldo(curItems))} ({curItems.length} fact.)</span>
-              </div>
-              <div style={{fontSize:12,fontWeight:700,color:C.ok,marginBottom:6}}>Corriente</div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:8,marginBottom:10}}>
-                {corrBuckets.map(b=><AgingCard key={b.label} b={b}/>)}
-              </div>
-              <div style={{fontSize:12,fontWeight:700,color:C.danger,marginBottom:6}}>Vencido</div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:8}}>
-                {vencBuckets.map(b=><AgingCard key={b.label} b={b}/>)}
+
+        {/* ── Por Mes × Clasificación ── */}
+        {mesesPresentes.length>0 && (
+          <div style={{background:"#fff",border:`1px solid ${C.border}`,borderRadius:18,padding:24,marginBottom:24,boxShadow:"0 2px 12px rgba(0,0,0,.05)"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",margin:"0 0 20px"}}>
+              <h2 style={{fontSize:17,fontWeight:800,color:C.navy,margin:0,display:"flex",alignItems:"center",gap:8}}>
+                📅 Por Mes × Clasificación
+              </h2>
+              {/* Currency toggle */}
+              <div style={{display:"flex",gap:4,background:"#F1F5F9",borderRadius:10,padding:3}}>
+                {[{cur:"MXN",flag:"🇲🇽"},{cur:"USD",flag:"🇺🇸"}].map(({cur,flag})=>(
+                  <button key={cur} onClick={()=>setDashMesMoneda(cur)}
+                    style={{padding:"5px 14px",borderRadius:8,border:"none",background:dashMesMoneda===cur?"#fff":"transparent",color:dashMesMoneda===cur?{MXN:C.mxn,USD:C.usd}[cur]:C.muted,fontWeight:dashMesMoneda===cur?700:400,fontSize:13,cursor:"pointer",fontFamily:"inherit",boxShadow:dashMesMoneda===cur?"0 1px 4px rgba(0,0,0,.1)":"none",transition:"all .15s"}}>
+                    {flag} {cur}
+                  </button>
+                ))}
               </div>
             </div>
-          );
-        })}
-        {/* Charts */}
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20,marginBottom:24}}>
-          <div style={{background:C.surface,borderRadius:16,padding:24,border:`1px solid ${C.border}`}}>
-            <h3 style={{fontSize:15,fontWeight:700,marginBottom:16,color:C.navy}}>Distribución por Moneda</h3>
-            {pieData.length>0?(
-              <ResponsiveContainer width="100%" height={200}>
-                <PieChart><Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({name,percent})=>`${name} ${(percent*100).toFixed(0)}%`}>
-                  {pieData.map((d,i)=><Cell key={i} fill={d.color}/>)}
-                </Pie><Tooltip formatter={v=>fmt(v)}/></PieChart>
-              </ResponsiveContainer>
-            ):<div style={{textAlign:"center",color:C.muted,padding:40}}>Sin datos</div>}
+            <div style={{overflowX:"auto"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                <thead>
+                  <tr style={{background:C.navy}}>
+                    <th style={{padding:"16px 20px",textAlign:"left",color:"#fff",fontWeight:600,fontSize:13,textTransform:"uppercase",whiteSpace:"nowrap",minWidth:140,letterSpacing:.3}}>Mes</th>
+                    {clasifPresentes.map((c,ci)=>(
+                      <th key={c} style={{padding:"16px 16px",textAlign:"center",color:"#CBD5E1",fontWeight:600,fontSize:12,textTransform:"uppercase",whiteSpace:"nowrap",letterSpacing:.3}}>
+                        <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+                          <div style={{width:8,height:8,borderRadius:3,background:clasifColors[(dashMesMoneda==="MXN"?clasifDataMXN:clasifDataUSD).findIndex(([n])=>n===c)%clasifColors.length],flexShrink:0}}/>
+                          {c}
+                        </div>
+                      </th>
+                    ))}
+                    {sinMesItems.length>0 && (
+                      <th style={{padding:"16px 16px",textAlign:"center",color:"#CE93D8",fontWeight:600,fontSize:12,textTransform:"uppercase",whiteSpace:"nowrap",letterSpacing:.3,borderLeft:`1px solid #4A2060`}}>
+                        <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+                          <div style={{width:8,height:8,borderRadius:3,background:"#9C27B0",flexShrink:0}}/>
+                          Sin mes en concepto
+                        </div>
+                      </th>
+                    )}
+                    <th style={{padding:"16px 16px",textAlign:"center",color:"#94A3B8",fontWeight:600,fontSize:12,whiteSpace:"nowrap",letterSpacing:.3}}>Total Mes</th>
+                  </tr>
+                  {/* Totals row */}
+                  <tr style={{background:"#EDE7F6",borderBottom:`2px solid #B39DDB`}}>
+                    <td style={{padding:"12px 20px",fontWeight:700,color:"#4527A0",fontSize:13}}>Total General</td>
+                    {clasifPresentes.map(c=>{
+                      const totalClasif = mesesPresentes.reduce((s,m)=>s+(mesClasiMap[m]?.[c]?.sum||0),0);
+                      return <td key={c} style={{padding:"12px 16px",textAlign:"center",fontWeight:700,color:"#4527A0",fontSize:15}}>{totalClasif>0?`$${fmt(totalClasif)}`:""}</td>;
+                    })}
+                    {sinMesItems.length>0 && <td style={{padding:"12px 16px",textAlign:"center",fontWeight:700,color:"#7B1FA2",fontSize:15}}>${fmt(sinMesItems.reduce((s,i)=>s+saldoOf(i),0))}</td>}
+                    <td style={{padding:"12px 16px",textAlign:"center",fontWeight:800,color:"#4527A0",fontSize:17,borderLeft:`1px solid #B39DDB`}}>
+                      ${fmt(mesesPresentes.reduce((s,m)=>s+clasifPresentes.reduce((ss,c)=>ss+(mesClasiMap[m]?.[c]?.sum||0),0),0) + sinMesItems.reduce((s,i)=>s+saldoOf(i),0))}
+                    </td>
+                  </tr>
+                </thead>
+                <tbody>
+                  {mesesPresentes.map((mes,mi)=>{
+                    const totalMes = clasifPresentes.reduce((s,c)=>s+(mesClasiMap[mes]?.[c]?.sum||0),0);
+                    const esPrevYear = hayMesesActuales && MESES_PREV_YEAR.includes(mes);
+                    const yearLabel = esPrevYear ? " '25" : hayMesesActuales ? " '26" : "";
+                    return(
+                      <tr key={mes} style={{borderTop:`1px solid ${C.border}`,background:mi%2===0?"#FAFBFF":"#fff"}}
+                        onMouseEnter={e=>e.currentTarget.style.background="#E8F0FE"}
+                        onMouseLeave={e=>e.currentTarget.style.background=mi%2===0?"#FAFBFF":"#fff"}>
+                        <td style={{padding:"14px 20px",fontWeight:700,color:C.navy,fontSize:15}}>
+                          {mes}
+                          {yearLabel && <span style={{fontSize:11,color:C.muted,marginLeft:4,fontWeight:400}}>{yearLabel}</span>}
+                        </td>
+                        {clasifPresentes.map(c=>{
+                          const cell = mesClasiMap[mes]?.[c];
+                          return(
+                            <td key={c} style={{padding:"14px 16px",textAlign:"center"}}>
+                              {cell && cell.sum>0 ? (
+                                <span onClick={()=>openDetailGrouped(`${mes}${yearLabel} · ${c}`,cell.items)}
+                                  style={{cursor:"pointer",display:"inline-block",textAlign:"center"}}>
+                                  <div style={{fontWeight:800,fontSize:16,color:C.navy,borderBottom:`1px dotted ${C.blue}`}}>${fmt(cell.sum)}</div>
+                                  <div style={{fontSize:11,color:C.muted,marginTop:2}}>{cell.items.length} fact.</div>
+                                </span>
+                              ) : <span style={{color:"#E2E8F0",fontSize:14}}>—</span>}
+                            </td>
+                          );
+                        })}
+                        {sinMesItems.length>0 && <td style={{padding:"14px 16px",textAlign:"center",borderLeft:`1px solid ${C.border}`}}><span style={{color:"#E2E8F0",fontSize:14}}>—</span></td>}
+                        <td style={{padding:"14px 16px",textAlign:"center",fontWeight:900,color:C.navy,fontSize:17,borderLeft:`2px solid ${C.border}`}}>
+                          {totalMes>0?`$${fmt(totalMes)}`:"—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {/* Fila: Sin mes en concepto */}
+                  {sinMesItems.length>0 && (
+                    <tr style={{borderTop:`2px solid #CE93D8`,background:"#F9F0FF"}}
+                      onMouseEnter={e=>e.currentTarget.style.background="#EDE7F6"}
+                      onMouseLeave={e=>e.currentTarget.style.background="#F9F0FF"}>
+                      <td style={{padding:"14px 20px",fontWeight:700,color:"#7B1FA2",fontSize:14}}>
+                        ⚠️ Sin mes en concepto
+                        <div style={{fontSize:11,color:"#9C27B0",marginTop:2,fontWeight:400}}>No se detectó mes en el concepto</div>
+                      </td>
+                      {clasifPresentes.map(c=><td key={c} style={{padding:"14px 16px",textAlign:"center"}}><span style={{color:"#E2E8F0"}}>—</span></td>)}
+                      <td style={{padding:"14px 16px",textAlign:"center",borderLeft:`1px solid #CE93D8`}}>
+                        <span onClick={()=>openDetailGrouped("Sin mes en concepto",sinMesItems)}
+                          style={{cursor:"pointer",display:"inline-block",textAlign:"center"}}>
+                          <div style={{fontWeight:800,fontSize:16,color:"#7B1FA2",borderBottom:`1px dotted #9C27B0`}}>${fmt(sinMesItems.reduce((s,i)=>s+saldoOf(i),0))}</div>
+                          <div style={{fontSize:11,color:"#9C27B0",marginTop:2}}>{sinMesItems.length} fact.</div>
+                        </span>
+                      </td>
+                      <td style={{padding:"14px 16px",textAlign:"center",fontWeight:900,color:"#7B1FA2",fontSize:17,borderLeft:`2px solid #CE93D8`}}>
+                        ${fmt(sinMesItems.reduce((s,i)=>s+saldoOf(i),0))}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
-          <div style={{background:C.surface,borderRadius:16,padding:24,border:`1px solid ${C.border}`}}>
-            <h3 style={{fontSize:15,fontWeight:700,marginBottom:16,color:C.navy}}>Saldo Pendiente por Clasificación</h3>
-            {claseData.length>0?(
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={claseData} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3"/><XAxis type="number" tickFormatter={v=>fmt(v)} fontSize={10}/>
-                  <YAxis type="category" dataKey="name" fontSize={11} width={90}/><Tooltip formatter={v=>fmt(v)}/>
-                  <Bar dataKey="value" fill={C.sky} radius={[0,4,4,0]}/>
-                </BarChart>
-              </ResponsiveContainer>
-            ):<div style={{textAlign:"center",color:C.muted,padding:40}}>Sin datos</div>}
-          </div>
-        </div>
-        <div style={{background:C.surface,borderRadius:16,padding:24,border:`1px solid ${C.border}`}}>
-          <h3 style={{fontSize:15,fontWeight:700,marginBottom:16,color:C.navy}}>⚠️ Facturas Vencidas</h3>
-          {[...invoices.MXN,...invoices.USD,...invoices.EUR].filter(i=>isOverdue(i.vencimiento,i.estatus)).sort((a,b)=>(a.vencimiento||"").localeCompare(b.vencimiento||"")).slice(0,8).map(inv=>{
-            const saldo=(+inv.total||0)-(+inv.montoPagado||0);
-            return (
-              <div key={inv.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:`1px solid ${C.border}`}}>
-                <div>
-                  <div style={{fontWeight:700,fontSize:14}}>{inv.proveedor}</div>
-                  <div style={{fontSize:12,color:C.muted}}>Folio {inv.folio} · {inv.fecha}</div>
-                  {+inv.montoPagado>0 && <div style={{fontSize:11,color:C.ok}}>Pagado: ${fmt(inv.montoPagado)}</div>}
-                </div>
-                <div style={{textAlign:"right"}}>
-                  <div style={{fontWeight:700,color:C.danger}}>${fmt(saldo)}</div>
-                  <div style={{fontSize:11,color:C.danger}}>{Math.abs(daysUntil(inv.vencimiento))} días vencida</div>
-                </div>
-              </div>
-            );
-          })}
-          {[...invoices.MXN,...invoices.USD,...invoices.EUR].filter(i=>isOverdue(i.vencimiento,i.estatus)).length===0 &&
-            <div style={{textAlign:"center",color:C.ok,padding:20}}>✅ Sin facturas vencidas</div>}
-        </div>
+        )}
       </div>
     );
   };
@@ -1081,8 +1285,163 @@ export default function CxpApp({ user, onLogout }) {
 
     return (
       <div>
-        {/* Currency tabs */}
-        <div style={{display:"flex",gap:8,marginBottom:16}}>
+        {/* ── Financiamientos + Tarjetas de Crédito ── */}
+        {(()=>{
+          const activos = financiamientos.filter(f=>f.activo);
+          const today = new Date(); today.setHours(0,0,0,0);
+          const getPlazos = (f) => {
+            const plazos = [];
+            if (!f.fechaInicio || !f.fechaFin) return plazos;
+            let d = new Date(f.fechaInicio+"T12:00:00");
+            const fin = new Date(f.fechaFin+"T12:00:00");
+            while (d <= fin) { plazos.push(d.toISOString().slice(0,10)); d = new Date(d.getFullYear(), d.getMonth()+1, d.getDate()); }
+            return plazos;
+          };
+          const ChipFinanc = ({f}) => {
+            const plazos = getPlazos(f);
+            const pagosF = financiamientoPagos.filter(p=>p.financiamientoId===f.id);
+            const pagosFechas = new Set(pagosF.map(p=>p.fechaPago));
+            const totalPlazos = plazos.length;
+            const pagados = plazos.filter(pl=>pagosFechas.has(pl)).length;
+            const pendientes = totalPlazos - pagados;
+            const saldo = f.montoMensual * pendientes;
+            const pct = totalPlazos>0 ? Math.round((pagados/totalPlazos)*100) : 0;
+            const proxPlazo = plazos.find(pl=>!pagosFechas.has(pl)&&new Date(pl+"T12:00:00")>=today);
+            const vencidos = plazos.filter(pl=>!pagosFechas.has(pl)&&new Date(pl+"T12:00:00")<today).length;
+            return (
+              <div onClick={()=>setFinancModalId(f.id)}
+                style={{background:"#fff",border:`2px solid ${vencidos>0?"#C62828":"#1565C0"}`,borderRadius:12,
+                  padding:"14px 16px",cursor:"pointer",flex:"1 1 0",minWidth:0,
+                  boxShadow:"0 2px 8px rgba(0,0,0,.08)",transition:"all .15s",position:"relative"}}
+                onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow="0 6px 16px rgba(0,0,0,.13)";}}
+                onMouseLeave={e=>{e.currentTarget.style.transform="translateY(0)";e.currentTarget.style.boxShadow="0 2px 8px rgba(0,0,0,.08)";}}>
+                {vencidos>0&&<div style={{position:"absolute",top:8,right:8,background:"#FFEBEE",color:"#C62828",fontSize:10,fontWeight:800,padding:"2px 8px",borderRadius:20}}>⚠️ {vencidos}</div>}
+                <div style={{fontWeight:900,fontSize:15,color:"#0F2D4A",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginBottom:3,paddingRight:vencidos>0?50:0}}>{f.nombre}</div>
+                <div style={{fontSize:12,color:C.muted,marginBottom:10,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.concepto}</div>
+                <div style={{fontSize:22,fontWeight:900,color:saldo>0?"#C62828":"#2E7D32",marginBottom:6}}>${fmt(saldo)}</div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}>
+                  <span style={{fontSize:13,color:C.muted,fontWeight:600}}>{pagados}/{totalPlazos} meses · ${fmt(f.montoMensual)}/mes</span>
+                  <span style={{fontSize:13,fontWeight:800,color:"#1565C0"}}>{pct}%</span>
+                </div>
+                <div style={{height:7,borderRadius:4,background:"#EEF2FF",overflow:"hidden"}}>
+                  <div style={{height:"100%",width:`${pct}%`,background:pct>=100?"#2E7D32":"#1565C0",borderRadius:4,transition:"width .4s"}}/>
+                </div>
+                {proxPlazo&&<div style={{fontSize:12,color:"#1565C0",marginTop:7,fontWeight:700}}>📅 Próx. pago: {proxPlazo}</div>}
+              </div>
+            );
+          };
+          return (
+            <div style={{display:"flex",gap:12,marginBottom:16,flexWrap:"wrap"}}>
+              {/* Financiamientos */}
+              <div style={{background:"#0F2D4A",borderRadius:12,overflow:"hidden",flex:"3 1 0",minWidth:0}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 14px"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <span style={{fontSize:15}}>🏦</span>
+                    <span style={{fontWeight:800,fontSize:12,color:"#fff",textTransform:"uppercase",letterSpacing:.5}}>Financiamientos</span>
+                    {activos.length>0&&<span style={{background:"rgba(255,255,255,.15)",color:"rgba(255,255,255,.9)",fontSize:10,fontWeight:700,padding:"1px 7px",borderRadius:20}}>{activos.length} activo{activos.length!==1?"s":""}</span>}
+                  </div>
+                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                    {activos.length===0&&<span style={{fontSize:11,color:"rgba(255,255,255,.4)"}}>Sin registros</span>}
+                    <button onClick={()=>financImportRef.current?.click()}
+                      style={{padding:"4px 10px",borderRadius:7,border:"1px solid rgba(255,255,255,.25)",background:"rgba(255,255,255,.1)",color:"#fff",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit"}}>
+                      📥 Importar
+                    </button>
+                  </div>
+                </div>
+                {activos.length>0&&(
+                  <div style={{display:"flex",gap:8,padding:"8px 10px 12px",background:"#F0F4FF"}}>
+                    {activos.map(f=><ChipFinanc key={f.id} f={f}/>)}
+                  </div>
+                )}
+              </div>
+              {/* Tarjetas de Crédito */}
+              <div style={{background:"#1A0533",borderRadius:12,overflow:"hidden",flex:"1 1 0",minWidth:220}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 14px"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <span style={{fontSize:15}}>💳</span>
+                    <span style={{fontWeight:800,fontSize:12,color:"#fff",textTransform:"uppercase",letterSpacing:.5}}>Tarjetas de Crédito</span>
+                    {tarjetas.filter(t=>t.activo).length>0&&<span style={{background:"rgba(255,255,255,.15)",color:"rgba(255,255,255,.9)",fontSize:10,fontWeight:700,padding:"1px 7px",borderRadius:20}}>{tarjetas.filter(t=>t.activo).length}</span>}
+                  </div>
+                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                    <button onClick={()=>tarjetaImportRef.current?.click()}
+                      style={{padding:"4px 10px",borderRadius:7,border:"1px solid rgba(255,255,255,.25)",background:"rgba(255,255,255,.1)",color:"#fff",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit"}}>
+                      📥 Importar CSV
+                    </button>
+                  </div>
+                </div>
+                {tarjetas.filter(t=>t.activo).length>0 ? (
+                  <div style={{display:"flex",gap:8,padding:"8px 10px 12px",background:"#F5F0FF",flexWrap:"wrap"}}>
+                    {tarjetas.filter(t=>t.activo).map(t=>{
+                      const pct = t.limite>0 ? Math.round((t.saldoActual/t.limite)*100) : 0;
+                      const disponible = t.limite - t.saldoActual;
+                      const movT = tarjetaMovimientos.filter(m=>m.tarjetaId===t.id);
+                      const now = new Date();
+                      const mesPrefix = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
+                      const cargosM = movT.filter(m=>m.monto>0&&m.tipo!=="PAGO"&&m.fecha?.startsWith(mesPrefix));
+                      const totalCargosM = cargosM.reduce((s,m)=>s+m.monto,0);
+                      return (
+                        <div key={t.id} onClick={()=>setTarjetaModalId(t.id)}
+                          style={{background:"#fff",border:"2px solid #7B1FA2",borderRadius:12,padding:"14px 16px",cursor:"pointer",flex:"1 1 0",minWidth:0,boxShadow:"0 2px 8px rgba(0,0,0,.08)",transition:"all .15s"}}
+                          onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow="0 6px 16px rgba(0,0,0,.13)";}}
+                          onMouseLeave={e=>{e.currentTarget.style.transform="translateY(0)";e.currentTarget.style.boxShadow="0 2px 8px rgba(0,0,0,.08)";}}>
+                        <div style={{fontWeight:900,fontSize:15,color:"#1A0533",marginBottom:1}}>{t.banco}</div>
+                          <div style={{fontSize:12,color:"#7B1FA2",marginBottom:8,fontWeight:600}}>{t.titular}</div>
+                          {editingSaldoId===t.id ? (
+                            <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:4}} onClick={e=>e.stopPropagation()}>
+                              <span style={{fontSize:15,fontWeight:700,color:"#C62828"}}>$</span>
+                              <input autoFocus value={editingSaldoVal}
+                                onChange={e=>setEditingSaldoVal(e.target.value)}
+                                onKeyDown={async e=>{
+                                  if(e.key==="Enter"){
+                                    const nuevo=parseFloat(editingSaldoVal.replace(/,/g,""));
+                                    if(!isNaN(nuevo)){await updateTarjetaSaldo(t.id,nuevo);setTarjetas(prev=>prev.map(x=>x.id===t.id?{...x,saldoActual:nuevo}:x));}
+                                    setEditingSaldoId(null);
+                                  }
+                                  if(e.key==="Escape") setEditingSaldoId(null);
+                                }}
+                                onBlur={()=>setEditingSaldoId(null)}
+                                placeholder={fmt(t.saldoActual)}
+                                style={{width:"100%",fontSize:22,fontWeight:900,color:"#C62828",border:"none",borderBottom:"2px solid #7B1FA2",outline:"none",background:"transparent",fontFamily:"inherit"}}/>
+                            </div>
+                          ) : (
+                            <div onClick={e=>{e.stopPropagation();setEditingSaldoId(t.id);setEditingSaldoVal(String(t.saldoActual));}}
+                              style={{fontSize:22,fontWeight:900,color:"#C62828",marginBottom:6,cursor:"text",borderBottom:"1px dashed #EF9A9A",display:"inline-block"}}
+                              title="Clic para editar saldo">
+                              ${fmt(t.saldoActual)} ✏️
+                            </div>
+                          )}
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}>
+                            <span style={{fontSize:13,color:"#666"}}>Disponible: <b style={{color:"#2E7D32"}}>${fmt(disponible)}</b></span>
+                            <span style={{fontSize:13,fontWeight:800,color:"#7B1FA2"}}>{pct}% usado</span>
+                          </div>
+                          <div style={{height:6,borderRadius:3,background:"#EDE7F6",overflow:"hidden"}}>
+                            <div style={{height:"100%",width:`${Math.min(pct,100)}%`,background:pct>80?"#C62828":pct>50?"#E65100":"#7B1FA2",borderRadius:3}}/>
+                          </div>
+                          {totalCargosM>0&&<div style={{fontSize:12,color:"#7B1FA2",marginTop:6,fontWeight:700}}>🛒 Este mes: ${fmt(totalCargosM)}</div>}
+                          <div style={{fontSize:11,color:"#999",marginTop:4}}>Corte día {t.fechaCorte} · Contrato {t.contrato}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div style={{padding:"12px 14px",background:"#F5F0FF",display:"flex",alignItems:"center",justifyContent:"center",minHeight:80}}>
+                    <span style={{fontSize:12,color:"#9C27B0",fontWeight:600,opacity:.7}}>Importa un CSV de Konfio para comenzar</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Internal tabs: Activas / Pagadas / Resumen */}
+        <div style={{display:"flex",borderBottom:`1px solid ${C.border}`,marginBottom:12,background:C.surface,borderRadius:"12px 12px 0 0",paddingLeft:8}}>
+          {tabBtn("activas","Activas","📋")}
+          {tabBtn("pagadas","Pagadas","✅")}
+          {tabBtn("resumen","Resumen","📊")}
+        </div>
+
+        {/* Monedas — debajo de los tabs */}
+        <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
           {["MXN","USD","EUR"].map(cur=>(
             <button key={cur} onClick={()=>setCurrency(cur)} style={{padding:"8px 24px",borderRadius:40,border:"2px solid",borderColor:currency===cur?{MXN:C.mxn,USD:C.usd,EUR:C.eur}[cur]:C.border,background:currency===cur?{MXN:C.mxn,USD:C.usd,EUR:C.eur}[cur]:C.surface,color:currency===cur?"#fff":C.text,fontWeight:700,cursor:"pointer",fontSize:14}}>
               {cur==="MXN"?"🇲🇽":cur==="USD"?"🇺🇸":"🇪🇺"} {cur}
@@ -1091,29 +1450,478 @@ export default function CxpApp({ user, onLogout }) {
           ))}
         </div>
 
-        {/* Internal tabs: Activas / Pagadas / Resumen */}
-        <div style={{display:"flex",borderBottom:`1px solid ${C.border}`,marginBottom:20,background:C.surface,borderRadius:"12px 12px 0 0",paddingLeft:8}}>
-          {tabBtn("activas","Activas","📋")}
-          {tabBtn("pagadas","Pagadas","✅")}
-          {tabBtn("resumen","Resumen","📊")}
-        </div>
+        {/* ── Input oculto para importar Excel de financiamientos ── */}
+        <input ref={financImportRef} type="file" accept=".xlsx,.xls" style={{display:"none"}}
+          onChange={async(e)=>{
+            const file = e.target.files[0];
+            if(!file) return;
+            e.target.value="";
+            try {
+              const buf = await file.arrayBuffer();
+              const wb = XLSX.read(buf, {type:"array", cellDates:true});
+              const creditos = [];
+              const MESES_MAP = {ene:1,feb:2,mar:3,abr:4,may:5,jun:6,jul:7,ago:8,sep:9,oct:10,nov:11,dic:12};
+              const parseFecha = (val) => {
+                if (!val) return null;
+                if (val instanceof Date && !isNaN(val)) return val.toISOString().slice(0,10);
+                const s = String(val).trim().toLowerCase();
+                let m;
+                m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+                if (m) { const y=m[3].length===2?2000+parseInt(m[3]):parseInt(m[3]); return `${y}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`; }
+                m = s.match(/^(\d{1,2})[\/\-]([a-záéíóú]+)[\/\-](\d{2,4})$/);
+                if (m) { const mes=MESES_MAP[m[2].slice(0,3)]; if(mes){const y=m[3].length===2?2000+parseInt(m[3]):parseInt(m[3]);return `${y}-${String(mes).padStart(2,'0')}-${m[1].padStart(2,'0')}`;} }
+                return null;
+              };
+              const parseMonto = (val) => { if(!val&&val!==0) return null; const n=parseFloat(String(val).replace(/[$,\s]/g,"")); return isNaN(n)?null:n; };
 
-        {/* Summary chips */}
-        {carteraTab !== "resumen" && (
-          <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
-            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 18px",fontSize:13}}>
-              <span style={{color:C.muted}}>Filtradas: </span><span style={{fontWeight:700}}>{filtered.length}</span>
-            </div>
-            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 18px",fontSize:13}}>
-              <span style={{color:C.muted}}>Total: </span><span style={{fontWeight:700}}>${fmt(totalFiltered)} {currency}</span>
-            </div>
-            {carteraTab==="activas" && (
-              <div style={{background:"#FFF3E0",border:"1px solid #FFCC02",borderRadius:10,padding:"10px 18px",fontSize:13}}>
-                <span style={{color:C.muted}}>Pendiente: </span><span style={{fontWeight:700,color:C.warn}}>${fmt(totalPendiente)} {currency}</span>
+              wb.SheetNames.forEach(sheetName => {
+                const ws = wb.Sheets[sheetName];
+                const rows = XLSX.utils.sheet_to_json(ws, {header:1, raw:false, defval:""});
+                if (!rows.length) return;
+                const nombre = String(rows[0]?.[0]||"").trim() || sheetName;
+                const concepto = String(rows[1]?.[0]||"").trim();
+                const pagosPorFecha = {};
+                rows.forEach(row => {
+                  for (let c=0; c<row.length; c+=2) {
+                    const fecha = parseFecha(row[c]);
+                    const monto = parseMonto(row[c+1]);
+                    if (fecha && monto && monto>0) pagosPorFecha[fecha]=(pagosPorFecha[fecha]||0)+monto;
+                  }
+                });
+                const plazos = Object.entries(pagosPorFecha).sort((a,b)=>a[0].localeCompare(b[0]));
+                if (!plazos.length) return;
+                creditos.push({
+                  nombre, concepto, moneda:"MXN",
+                  montoMensual: plazos[0][1],
+                  fechaInicio: plazos[0][0],
+                  fechaFin: plazos[plazos.length-1][0],
+                  diaPago: parseInt(plazos[0][0].slice(8,10)),
+                  totalMeses: plazos.length,
+                  sheetName,
+                });
+              });
+              if (!creditos.length) { alert("No se encontraron créditos válidos en el Excel"); return; }
+              setFinancImportPreview(creditos);
+            } catch(err) { console.error(err); alert("Error al leer el Excel: "+err.message); }
+          }}/>
+
+        {/* ── Modal Preview Importación ── */}
+        {financImportPreview && (
+          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.6)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
+            onClick={()=>setFinancImportPreview(null)}>
+            <div style={{background:"#fff",borderRadius:18,width:"100%",maxWidth:800,maxHeight:"90vh",display:"flex",flexDirection:"column",boxShadow:"0 24px 64px rgba(0,0,0,.3)"}}
+              onClick={e=>e.stopPropagation()}>
+              <div style={{padding:"18px 24px",background:"#0F2D4A",borderRadius:"18px 18px 0 0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div>
+                  <div style={{fontWeight:800,fontSize:17,color:"#fff"}}>📥 Importar Financiamientos</div>
+                  <div style={{fontSize:12,color:"#90CAF9",marginTop:2}}>{financImportPreview.length} crédito{financImportPreview.length!==1?"s":""} detectado{financImportPreview.length!==1?"s":""}</div>
+                </div>
+                <button onClick={()=>setFinancImportPreview(null)} style={{background:"rgba(255,255,255,.15)",border:"none",borderRadius:8,color:"#fff",width:34,height:34,cursor:"pointer",fontSize:18}}>×</button>
               </div>
-            )}
+              <div style={{overflowY:"auto",flex:1,padding:20}}>
+                {financImportPreview.map((cr,i)=>(
+                  <div key={i} style={{background:"#F8FAFC",border:`1px solid ${C.border}`,borderRadius:14,padding:18,marginBottom:12}}>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                      <div>
+                        <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",marginBottom:4}}>Nombre (editable)</div>
+                        <input defaultValue={cr.nombre} onChange={e=>{const p=[...financImportPreview];p[i]={...p[i],nombre:e.target.value};setFinancImportPreview(p);}}
+                          style={{width:"100%",padding:"8px 12px",borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,fontFamily:"inherit",boxSizing:"border-box"}}/>
+                      </div>
+                      <div>
+                        <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",marginBottom:4}}>Concepto (editable)</div>
+                        <input defaultValue={cr.concepto} onChange={e=>{const p=[...financImportPreview];p[i]={...p[i],concepto:e.target.value};setFinancImportPreview(p);}}
+                          style={{width:"100%",padding:"8px 12px",borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,fontFamily:"inherit",boxSizing:"border-box"}}/>
+                      </div>
+                    </div>
+                    <div style={{display:"flex",gap:16,marginTop:14,flexWrap:"wrap"}}>
+                      {[
+                        {l:"Mensualidad",  v:`$${fmt(cr.montoMensual)}`},
+                        {l:"Total meses",  v:cr.totalMeses},
+                        {l:"Inicio",       v:cr.fechaInicio},
+                        {l:"Fin",          v:cr.fechaFin},
+                        {l:"Día de pago",  v:`Día ${cr.diaPago}`},
+                        {l:"Monto total",  v:`$${fmt(cr.montoMensual*cr.totalMeses)}`},
+                      ].map(k=>(
+                        <div key={k.l} style={{background:"#fff",borderRadius:10,padding:"8px 14px",border:`1px solid ${C.border}`}}>
+                          <div style={{fontSize:10,color:C.muted,fontWeight:700,textTransform:"uppercase"}}>{k.l}</div>
+                          <div style={{fontSize:14,fontWeight:800,color:C.navy,marginTop:2}}>{k.v}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div style={{padding:"14px 24px",borderTop:`1px solid ${C.border}`,display:"flex",gap:10,justifyContent:"flex-end",background:"#F8FAFC",borderRadius:"0 0 18px 18px"}}>
+                <button onClick={()=>setFinancImportPreview(null)}
+                  style={{padding:"9px 20px",borderRadius:10,border:`1px solid ${C.border}`,background:"#fff",color:C.text,cursor:"pointer",fontSize:13,fontFamily:"inherit",fontWeight:600}}>
+                  Cancelar
+                </button>
+                <button disabled={financImportando} onClick={async()=>{
+                  setFinancImportando(true);
+                  for (const cr of financImportPreview) {
+                    const nuevo = await insertFinanciamiento({...cr, empresaId});
+                    if (nuevo) setFinanciamientos(prev=>[...prev, nuevo]);
+                  }
+                  setFinancImportPreview(null);
+                  setFinancImportando(false);
+                }} style={{padding:"9px 24px",borderRadius:10,border:"none",background:financImportando?"#90CAF9":"#0F2D4A",color:"#fff",cursor:financImportando?"wait":"pointer",fontSize:13,fontFamily:"inherit",fontWeight:700}}>
+                  {financImportando?"Guardando…":"✅ Confirmar e importar"}
+                </button>
+              </div>
+            </div>
           </div>
         )}
+
+        {/* ── Financiamiento Detail Modal ── */}
+        {financModalId && (()=>{
+          const f = financiamientos.find(x=>x.id===financModalId);
+          if (!f) return null;
+          const today2 = new Date(); today2.setHours(0,0,0,0);
+          const sym = "$";
+          const getPlazos2 = (fin) => {
+            const plazos = [];
+            if (!fin.fechaInicio || !fin.fechaFin) return plazos;
+            let d = new Date(fin.fechaInicio+"T12:00:00");
+            const fe = new Date(fin.fechaFin+"T12:00:00");
+            while (d <= fe) { plazos.push(d.toISOString().slice(0,10)); d = new Date(d.getFullYear(), d.getMonth()+1, d.getDate()); }
+            return plazos;
+          };
+          const plazos = getPlazos2(f);
+          const pagosF = financiamientoPagos.filter(p=>p.financiamientoId===f.id);
+          const pagosFechas = new Set(pagosF.map(p=>p.fechaPago));
+          const totalPlazos = plazos.length;
+          const pagados = plazos.filter(pl=>pagosFechas.has(pl)).length;
+          const pendientes = totalPlazos - pagados;
+          const totalPagado = pagosF.reduce((s,p)=>s+p.monto,0);
+          const montoTotal = f.montoMensual * totalPlazos;
+          const saldo = f.montoMensual * pendientes;
+          const pct = totalPlazos>0 ? Math.round((pagados/totalPlazos)*100) : 0;
+          const proxPlazo = plazos.find(pl=>!pagosFechas.has(pl)&&new Date(pl+"T12:00:00")>=today2);
+          const vencidos = plazos.filter(pl=>!pagosFechas.has(pl)&&new Date(pl+"T12:00:00")<today2);
+          const MESES_N = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+          const togglePago = async(fecha) => {
+            if (pagosFechas.has(fecha)) {
+              const pago = pagosF.find(p=>p.fechaPago===fecha);
+              if (pago) { await deleteFinanciamientoPago(pago.id); setFinanciamientoPagos(prev=>prev.filter(p=>p.id!==pago.id)); }
+            } else {
+              const nuevo = await insertFinanciamientoPago({financiamientoId:f.id,fechaPago:fecha,monto:f.montoMensual,notas:""});
+              if (nuevo) setFinanciamientoPagos(prev=>[...prev,nuevo]);
+            }
+          };
+          return (
+            <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.6)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center",padding:10}}
+              onClick={()=>setFinancModalId(null)}>
+              <div style={{background:"#fff",borderRadius:20,width:"100%",maxWidth:"95vw",maxHeight:"94vh",display:"flex",flexDirection:"column",boxShadow:"0 24px 64px rgba(0,0,0,.3)"}}
+                onClick={e=>e.stopPropagation()}>
+                <div style={{padding:"20px 28px",background:"#0F2D4A",borderRadius:"20px 20px 0 0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div>
+                    <div style={{fontSize:11,color:"#90CAF9",fontWeight:700,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>🏦 Financiamiento · MXN</div>
+                    <div style={{fontWeight:900,fontSize:20,color:"#fff"}}>{f.nombre}</div>
+                    <div style={{fontSize:13,color:"rgba(255,255,255,.65)",marginTop:2}}>{f.concepto}</div>
+                  </div>
+                  <button onClick={()=>setFinancModalId(null)} style={{background:"rgba(255,255,255,.15)",border:"none",borderRadius:10,color:"#fff",width:38,height:38,cursor:"pointer",fontSize:22}}>×</button>
+                </div>
+                <div style={{padding:"14px 28px",background:"#F8FAFC",borderBottom:`1px solid ${C.border}`,display:"flex",gap:10,flexWrap:"wrap"}}>
+                  {[
+                    {icon:"💰",l:"Monto Total",      v:`${sym}${fmt(montoTotal)}`,    c:"#0F2D4A"},
+                    {icon:"✅",l:"Total Pagado",      v:`${sym}${fmt(totalPagado)}`,   c:"#1B5E20"},
+                    {icon:"⏳",l:"Saldo Restante",    v:`${sym}${fmt(saldo)}`,         c:saldo>0?"#C62828":"#1B5E20"},
+                    {icon:"📅",l:"Meses Pagados",     v:`${pagados} de ${totalPlazos}`,c:"#1565C0"},
+                    {icon:"💵",l:"Mensualidad",       v:`${sym}${fmt(f.montoMensual)}`,c:"#0F2D4A"},
+                    {icon:"📆",l:"Próximo Pago",      v:proxPlazo||"—",               c:proxPlazo?"#1565C0":C.muted},
+                    {icon:"🏁",l:"Liquidación",       v:f.fechaFin||"—",             c:"#4A0000"},
+                    ...(vencidos.length>0?[{icon:"⚠️",l:"Vencidos sin pagar",v:`${vencidos.length} pago${vencidos.length!==1?"s":""}`,c:"#C62828"}]:[]),
+                  ].map(k=>(
+                    <div key={k.l} style={{background:"#fff",borderRadius:12,padding:"10px 16px",border:`1px solid ${C.border}`,flex:"1 1 130px",minWidth:130}}>
+                      <div style={{fontSize:10,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:.4,marginBottom:3}}>{k.icon} {k.l}</div>
+                      <div style={{fontSize:14,fontWeight:900,color:k.c}}>{k.v}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{padding:"10px 28px",background:"#F8FAFC",borderBottom:`1px solid ${C.border}`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:4,fontSize:12,color:C.muted,fontWeight:600}}>
+                    <span>{pct}% liquidado</span><span>{pendientes} meses restantes</span>
+                  </div>
+                  <div style={{height:8,borderRadius:4,background:"#EEF2FF",overflow:"hidden"}}>
+                    <div style={{height:"100%",width:`${pct}%`,background:pct>=100?"#2E7D32":"#1565C0",borderRadius:4,transition:"width .5s"}}/>
+                  </div>
+                </div>
+                <div style={{overflowY:"auto",flex:1,padding:"20px 28px"}}>
+                  <div style={{fontSize:13,fontWeight:700,color:C.navy,marginBottom:14}}>📋 Calendario de pagos — clic para marcar como pagado/pendiente</div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:8}}>
+                    {plazos.map((pl,idx)=>{
+                      const fechaD = new Date(pl+"T12:00:00");
+                      const isPagado = pagosFechas.has(pl);
+                      const isVencido = !isPagado && fechaD < today2;
+                      const isProximo = pl === proxPlazo;
+                      const mes = MESES_N[fechaD.getMonth()];
+                      const anio = fechaD.getFullYear();
+                      const bg = isPagado?"#E8F5E9":isVencido?"#FFEBEE":isProximo?"#E3F2FD":"#F8FAFC";
+                      const border = isPagado?"#A5D6A7":isVencido?"#EF9A9A":isProximo?"#90CAF9":"#E2E8F0";
+                      const color = isPagado?"#1B5E20":isVencido?"#C62828":isProximo?"#1565C0":C.muted;
+                      return (
+                        <div key={pl} onClick={()=>togglePago(pl)}
+                          style={{background:bg,border:`1.5px solid ${border}`,borderRadius:10,padding:"10px 14px",cursor:"pointer",transition:"all .1s"}}
+                          onMouseEnter={e=>e.currentTarget.style.opacity=".8"}
+                          onMouseLeave={e=>e.currentTarget.style.opacity="1"}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                            <span style={{fontSize:11,fontWeight:700,color,textTransform:"uppercase"}}>{mes} {anio}</span>
+                            <span style={{fontSize:16}}>{isPagado?"✅":isVencido?"🔴":isProximo?"🔵":"⏳"}</span>
+                          </div>
+                          <div style={{fontSize:13,fontWeight:800,color}}>{sym}{fmt(f.montoMensual)}</div>
+                          <div style={{fontSize:10,color,marginTop:2,opacity:.8}}>{isPagado?"Pagado":isVencido?"Vencido":isProximo?"Próximo":"Pendiente"} · #{idx+1}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ── Tarjeta Import Preview Modal ── */}
+        {tarjetaImportPreview && (
+          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.6)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center",padding:10}}
+            onClick={()=>setTarjetaImportPreview(null)}>
+            <div style={{background:"#fff",borderRadius:18,width:"100%",maxWidth:"95vw",maxHeight:"94vh",display:"flex",flexDirection:"column",boxShadow:"0 24px 64px rgba(0,0,0,.3)"}}
+              onClick={e=>e.stopPropagation()}>
+              <div style={{padding:"18px 24px",background:"#1A0533",borderRadius:"18px 18px 0 0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div>
+                  <div style={{fontWeight:800,fontSize:17,color:"#fff"}}>💳 Importar Movimientos — {tarjetaImportPreview.fileName}</div>
+                  <div style={{fontSize:12,color:"#CE93D8",marginTop:2}}>{tarjetaImportPreview.movs.length} movimientos detectados</div>
+                </div>
+                <button onClick={()=>setTarjetaImportPreview(null)} style={{background:"rgba(255,255,255,.15)",border:"none",borderRadius:8,color:"#fff",width:34,height:34,cursor:"pointer",fontSize:18}}>×</button>
+              </div>
+              {/* KPI preview */}
+              <div style={{padding:"14px 24px",background:"#F5F0FF",borderBottom:"1px solid #E1BEE7",display:"flex",gap:12,flexWrap:"wrap"}}>
+                {[
+                  {l:"Total movimientos", v:tarjetaImportPreview.movs.length, c:"#1A0533"},
+                  {l:"Cargos/Compras",    v:tarjetaImportPreview.cargos.length, c:"#C62828"},
+                  {l:"Total cargos",      v:`$${fmt(tarjetaImportPreview.cargos.reduce((s,m)=>s+m.monto,0))}`, c:"#C62828"},
+                  {l:"Pagos",            v:tarjetaImportPreview.pagos.length, c:"#1B5E20"},
+                  {l:"Total pagos",      v:`$${fmt(Math.abs(tarjetaImportPreview.pagos.reduce((s,m)=>s+m.monto,0)))}`, c:"#1B5E20"},
+                ].map(k=>(
+                  <div key={k.l} style={{background:"#fff",borderRadius:10,padding:"8px 14px",border:"1px solid #E1BEE7",flex:"1 1 120px"}}>
+                    <div style={{fontSize:10,color:"#7B1FA2",fontWeight:700,textTransform:"uppercase"}}>{k.l}</div>
+                    <div style={{fontSize:16,fontWeight:900,color:k.c,marginTop:2}}>{k.v}</div>
+                  </div>
+                ))}
+              </div>
+              {/* Preview table */}
+              <div style={{overflowY:"auto",flex:1}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                  <thead style={{position:"sticky",top:0}}>
+                    <tr style={{background:"#1A0533"}}>
+                      {["Fecha","Descripción","Integrante","Tipo","Monto"].map(h=>(
+                        <th key={h} style={{padding:"9px 12px",textAlign:h==="Monto"?"right":"left",color:"rgba(255,255,255,.85)",fontWeight:700,fontSize:11,textTransform:"uppercase"}}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tarjetaImportPreview.movs.slice(0,50).map((m,i)=>(
+                      <tr key={i} style={{borderTop:"1px solid #F3E5F5",background:i%2===0?"#fff":"#FDF7FF"}}>
+                        <td style={{padding:"8px 12px",color:"#666",whiteSpace:"nowrap"}}>{m.fecha}</td>
+                        <td style={{padding:"8px 12px",maxWidth:260,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.descripcion}</td>
+                        <td style={{padding:"8px 12px",color:"#7B1FA2",fontWeight:600}}>{m.integrante||"—"}</td>
+                        <td style={{padding:"8px 12px"}}>
+                          <span style={{background:m.tipo==="PAGO"?"#E8F5E9":m.tipo==="TRANSFERENCIA"?"#E3F2FD":"#FFF3E0",
+                            color:m.tipo==="PAGO"?"#1B5E20":m.tipo==="TRANSFERENCIA"?"#1565C0":"#E65100",
+                            fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:20}}>{m.tipo}</span>
+                        </td>
+                        <td style={{padding:"8px 12px",textAlign:"right",fontWeight:700,color:m.monto<0?"#1B5E20":"#C62828"}}>{m.monto<0?"-":""}${fmt(Math.abs(m.monto))}</td>
+                      </tr>
+                    ))}
+                    {tarjetaImportPreview.movs.length>50&&(
+                      <tr><td colSpan={5} style={{padding:"10px",textAlign:"center",color:"#7B1FA2",fontStyle:"italic"}}>
+                        ... y {tarjetaImportPreview.movs.length-50} movimientos más
+                      </td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{padding:"14px 24px",borderTop:"1px solid #E1BEE7",display:"flex",gap:10,justifyContent:"flex-end",background:"#F5F0FF",borderRadius:"0 0 18px 18px"}}>
+                <button onClick={()=>setTarjetaImportPreview(null)}
+                  style={{padding:"9px 20px",borderRadius:10,border:"1px solid #E1BEE7",background:"#fff",color:"#333",cursor:"pointer",fontSize:13,fontFamily:"inherit",fontWeight:600}}>
+                  Cancelar
+                </button>
+                <button disabled={tarjetaImportando} onClick={async()=>{
+                  setTarjetaImportando(true);
+                  const {inserted, dupes} = await bulkInsertMovimientos(tarjetaImportPreview.movs);
+                  const nuevos = await fetchTarjetaMovimientos(empresaId);
+                  setTarjetaMovimientos(nuevos);
+                  setTarjetaImportPreview(null);
+                  setTarjetaImportando(false);
+                  alert(`✅ ${inserted} nuevos movimientos importados · ${dupes||0} duplicados ignorados`);
+                }} style={{padding:"9px 24px",borderRadius:10,border:"none",background:tarjetaImportando?"#CE93D8":"#7B1FA2",color:"#fff",cursor:tarjetaImportando?"wait":"pointer",fontSize:13,fontFamily:"inherit",fontWeight:700}}>
+                  {tarjetaImportando?"Importando…":"✅ Confirmar e importar"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Tarjeta Detail Modal ── */}
+        {tarjetaModalId && (()=>{
+          const t = tarjetas.find(x=>x.id===tarjetaModalId);
+          if (!t) return null;
+          const movT = tarjetaMovimientos.filter(m=>m.tarjetaId===t.id);
+          const filtroInt = tarjetaFiltroInt;
+          const setFiltroInt = setTarjetaFiltroInt;
+          const filtroTipo = tarjetaFiltroTipo;
+          const setFiltroTipo = setTarjetaFiltroTipo;
+          const filtroMes = tarjetaFiltroMes;
+          const setFiltroMes = setTarjetaFiltroMes;
+          const integrantes = [...new Set(movT.map(m=>m.integrante).filter(Boolean))].sort();
+          const mesesDisp = [...new Set(movT.map(m=>m.fecha?.slice(0,7)).filter(Boolean))].sort().reverse();
+          const MESES_N = ["Enero","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+          const filtrados = movT.filter(m=>{
+            if(filtroInt && m.integrante!==filtroInt) return false;
+            if(filtroTipo && m.tipo!==filtroTipo) return false;
+            if(filtroMes && !m.fecha?.startsWith(filtroMes)) return false;
+            return true;
+          });
+          const cargosF = filtrados.filter(m=>m.monto>0&&m.tipo!=="PAGO");
+          const pagosF  = filtrados.filter(m=>m.monto<0||m.tipo==="PAGO");
+          const totalCargos = cargosF.reduce((s,m)=>s+m.monto,0);
+          const totalPagos  = Math.abs(pagosF.reduce((s,m)=>s+m.monto,0));
+          const pct = t.limite>0?Math.round((t.saldoActual/t.limite)*100):0;
+          // Por integrante
+          const porInt = {};
+          cargosF.forEach(m=>{ const k=m.integrante||"Sin asignar"; porInt[k]=(porInt[k]||0)+m.monto; });
+          const intSorted = Object.entries(porInt).sort((a,b)=>b[1]-a[1]);
+          return (
+            <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.6)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center",padding:10}}
+              onClick={()=>{setTarjetaModalId(null);setTarjetaFiltroInt("");setTarjetaFiltroTipo("");setTarjetaFiltroMes("");}}>
+              <div style={{background:"#fff",borderRadius:20,width:"100%",maxWidth:"98vw",maxHeight:"96vh",display:"flex",flexDirection:"column",boxShadow:"0 24px 64px rgba(0,0,0,.3)"}}
+                onClick={e=>e.stopPropagation()}>
+                {/* Header */}
+                <div style={{padding:"18px 28px",background:"#1A0533",borderRadius:"20px 20px 0 0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div>
+                    <div style={{fontSize:11,color:"#CE93D8",fontWeight:700,textTransform:"uppercase",letterSpacing:.5}}>💳 Tarjeta de Crédito</div>
+                    <div style={{fontWeight:900,fontSize:20,color:"#fff",marginTop:4}}>{t.banco} · {t.titular}</div>
+                    <div style={{fontSize:12,color:"rgba(255,255,255,.6)",marginTop:2}}>Contrato {t.contrato} · Corte día {t.fechaCorte}</div>
+                  </div>
+                  <button onClick={()=>{setTarjetaModalId(null);setTarjetaFiltroInt("");setTarjetaFiltroTipo("");setTarjetaFiltroMes("");}} style={{background:"rgba(255,255,255,.15)",border:"none",borderRadius:10,color:"#fff",width:38,height:38,cursor:"pointer",fontSize:22}}>×</button>
+                </div>
+                {/* KPIs */}
+                <div style={{padding:"14px 24px",background:"#F5F0FF",borderBottom:"1px solid #E1BEE7",display:"flex",gap:10,flexWrap:"wrap"}}>
+                  {[
+                    {icon:"💳",l:"Límite",       v:`$${fmt(t.limite)}`,      c:"#1A0533"},
+                    {icon:"🔴",l:"Saldo Actual",  v:`$${fmt(t.saldoActual)}`, c:"#C62828"},
+                    {icon:"✅",l:"Disponible",    v:`$${fmt(t.limite-t.saldoActual)}`, c:"#1B5E20"},
+                    {icon:"📊",l:"% Utilizado",   v:`${pct}%`,               c:pct>80?"#C62828":pct>50?"#E65100":"#7B1FA2"},
+                    {icon:"🛒",l:"Cargos período",v:`$${fmt(totalCargos)}`,   c:"#C62828"},
+                    {icon:"💰",l:"Pagos período", v:`$${fmt(totalPagos)}`,    c:"#1B5E20"},
+                    {icon:"📋",l:"Movimientos",   v:filtrados.length,         c:"#1A0533"},
+                  ].map(k=>(
+                    <div key={k.l} style={{background:"#fff",borderRadius:12,padding:"10px 16px",border:"1px solid #E1BEE7",flex:"1 1 120px"}}>
+                      <div style={{fontSize:10,color:"#7B1FA2",fontWeight:700,textTransform:"uppercase",letterSpacing:.4,marginBottom:3}}>{k.icon} {k.l}</div>
+                      <div style={{fontSize:15,fontWeight:900,color:k.c}}>{k.v}</div>
+                    </div>
+                  ))}
+                </div>
+                {/* Barra utilización */}
+                <div style={{padding:"10px 28px",background:"#F5F0FF",borderBottom:"1px solid #E1BEE7"}}>
+                  <div style={{height:8,borderRadius:4,background:"#EDE7F6",overflow:"hidden"}}>
+                    <div style={{height:"100%",width:`${Math.min(pct,100)}%`,background:pct>80?"#C62828":pct>50?"#E65100":"#7B1FA2",borderRadius:4,transition:"width .5s"}}/>
+                  </div>
+                </div>
+                {/* Filtros + por integrante */}
+                <div style={{padding:"12px 24px",borderBottom:"1px solid #E1BEE7",display:"flex",gap:10,flexWrap:"wrap",alignItems:"center",background:"#FAFAFA"}}>
+                  <select value={filtroInt} onChange={e=>setFiltroInt(e.target.value)}
+                    style={{padding:"6px 10px",borderRadius:8,border:"1px solid #E1BEE7",fontSize:12,fontFamily:"inherit"}}>
+                    <option value="">👥 Todos los integrantes</option>
+                    {integrantes.map(i=><option key={i}>{i}</option>)}
+                  </select>
+                  <select value={filtroTipo} onChange={e=>setFiltroTipo(e.target.value)}
+                    style={{padding:"6px 10px",borderRadius:8,border:"1px solid #E1BEE7",fontSize:12,fontFamily:"inherit"}}>
+                    <option value="">📋 Todos los tipos</option>
+                    {["COMPRA","CARGO","PAGO","TRANSFERENCIA"].map(t=><option key={t}>{t}</option>)}
+                  </select>
+                  <select value={filtroMes} onChange={e=>setFiltroMes(e.target.value)}
+                    style={{padding:"6px 10px",borderRadius:8,border:"1px solid #E1BEE7",fontSize:12,fontFamily:"inherit"}}>
+                    <option value="">📅 Todos los meses</option>
+                    {mesesDisp.map(m=>{const[y,mo]=m.split("-");return <option key={m} value={m}>{MESES_N[+mo-1]} {y}</option>;})}
+                  </select>
+                  {(filtroInt||filtroTipo||filtroMes)&&<button onClick={()=>{setFiltroInt("");setFiltroTipo("");setFiltroMes("");}}
+                    style={{padding:"6px 12px",borderRadius:8,border:"1px solid #E1BEE7",background:"#fff",cursor:"pointer",fontSize:11,fontFamily:"inherit"}}>✕ Limpiar</button>}
+                  {/* Por integrante chips */}
+                  <div style={{marginLeft:"auto",display:"flex",gap:6,flexWrap:"wrap"}}>
+                    {intSorted.map(([k,v])=>(
+                      <span key={k} onClick={()=>setFiltroInt(filtroInt===k?"":k)}
+                        style={{background:filtroInt===k?"#7B1FA2":"#EDE7F6",color:filtroInt===k?"#fff":"#7B1FA2",
+                          fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:20,cursor:"pointer"}}>
+                        {k.split(" ")[0]}: ${fmt(v)}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                {/* Tabla movimientos */}
+                <div style={{overflowY:"auto",flex:1}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                    <thead style={{position:"sticky",top:0}}>
+                      <tr style={{background:"#1A0533"}}>
+                        {["Fecha","Descripción","Integrante","Tipo","Tarjeta","Estatus","Monto"].map(h=>(
+                          <th key={h} style={{padding:"10px 14px",textAlign:h==="Monto"?"right":"left",color:"rgba(255,255,255,.85)",fontWeight:700,fontSize:11,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filtrados.sort((a,b)=>b.fecha?.localeCompare(a.fecha||"")||0).map((m,i)=>(
+                        <tr key={m.id||i} style={{borderTop:"1px solid #F3E5F5",background:i%2===0?"#fff":"#FDF7FF"}}>
+                          <td style={{padding:"9px 14px",color:"#666",whiteSpace:"nowrap",fontSize:12}}>{m.fecha}</td>
+                          <td style={{padding:"9px 14px",maxWidth:260,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.descripcion}</td>
+                          <td style={{padding:"9px 14px",color:"#7B1FA2",fontWeight:600,fontSize:12}}>{m.integrante||"—"}</td>
+                          <td style={{padding:"9px 14px"}}>
+                            <span style={{background:m.tipo==="PAGO"?"#E8F5E9":m.tipo==="TRANSFERENCIA"?"#E3F2FD":"#FFF3E0",
+                              color:m.tipo==="PAGO"?"#1B5E20":m.tipo==="TRANSFERENCIA"?"#1565C0":"#E65100",
+                              fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:20}}>{m.tipo}</span>
+                          </td>
+                          <td style={{padding:"9px 14px",fontSize:12,color:"#999"}}>{m.tarjetaNum||"—"}</td>
+                          <td style={{padding:"9px 14px",fontSize:11,color:m.estatus==="Aplicada"?"#1B5E20":"#E65100"}}>{m.estatus||"—"}</td>
+                          <td style={{padding:"9px 14px",textAlign:"right",fontWeight:800,fontSize:14,color:m.monto<0?"#1B5E20":"#C62828"}}>
+                            {m.monto<0?"-":""}${fmt(Math.abs(m.monto))}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ── Input oculto tarjeta CSV ── */}
+        <input ref={tarjetaImportRef} type="file" accept=".csv" style={{display:"none"}}
+          onChange={async(e)=>{
+            const file = e.target.files[0];
+            if(!file) return;
+            e.target.value="";
+            const text = await file.text();
+            const lines = text.split("\n").filter(l=>l.trim());
+            const headers = lines[0].split(",").map(h=>h.trim().replace(/"/g,""));
+            const rows = lines.slice(1).map(line=>{
+              const cols=[]; let cur="",inQ=false;
+              for(let ch of line){if(ch==='"'){inQ=!inQ;}else if(ch===','&&!inQ){cols.push(cur);cur="";}else{cur+=ch;}}
+              cols.push(cur);
+              const r={}; headers.forEach((h,i)=>r[h]=cols[i]?.trim().replace(/"/g,"")||""); return r;
+            }).filter(r=>r["Fecha operacion"]);
+            const tarjetaId = tarjetas.find(t=>t.activo)?.id;
+            const movs = rows.map(r=>({
+              empresa_id: empresaId, tarjeta_id: tarjetaId||null,
+              fecha: r["Fecha operacion"]||null,
+              descripcion: r["Descripcion"]||"",
+              monto: parseFloat((r["Monto ($)"]||"0").replace(/,/g,"")),
+              tipo: r["Tipo"]||"", integrante: r["Integrante"]||"",
+              no_autorizacion: r["No autorizacion"]||"",
+              tarjeta_num: r["Número"]||"", estatus: r["Estatus"]||"", rfc: r["RFC"]||"",
+            }));
+            const cargos = movs.filter(m=>m.monto>0&&m.tipo!=="PAGO");
+            const pagos  = movs.filter(m=>m.monto<0||m.tipo==="PAGO");
+            setTarjetaImportPreview({movs, cargos, pagos, fileName:file.name});
+          }}/>
 
         {/* Duplicate folios alert */}
         {dupeCount>0 && (
@@ -1123,93 +1931,188 @@ export default function CxpApp({ user, onLogout }) {
           </div>
         )}
 
-        {/* Filters */}
-        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:18,marginBottom:20}}>
-          <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
-            <input ref={searchRef} placeholder="🔍 Buscar…" value={search} onChange={e=>setSearch(e.target.value)} style={{...inputStyle,maxWidth:200}} />
-            {/* Filtro por Grupo */}
-            <select value={filtroGrupo} onChange={e=>setFiltroGrupo(e.target.value)}
-              style={{...selectStyle,maxWidth:180,borderColor:filtroGrupo?C.blue:C.border,color:filtroGrupo?C.blue:C.text,fontWeight:filtroGrupo?700:400}}>
-              <option value="">🏨 Grupo</option>
-              {gruposList.length===0 && <option disabled>— Sin grupos configurados —</option>}
-              {gruposList.map(g=><option key={g} value={g}>{g}</option>)}
-            </select>
-            <select value={filters.proveedor} onChange={e=>setFilters(f=>({...f,proveedor:e.target.value}))} style={{...selectStyle,maxWidth:200}}>
-              <option value="">Todos los proveedores</option>
-              {[...new Set(curInvoices.map(i=>i.proveedor))].sort().map(p=><option key={p}>{p}</option>)}
-            </select>
-            <select value={filters.clasificacion} onChange={e=>setFilters(f=>({...f,clasificacion:e.target.value}))} style={{...selectStyle,maxWidth:180}}>
+        {/* ── UNIFIED FILTER + ACTION BAR ── */}
+        <div style={{background:"#fff",border:`1px solid ${C.border}`,borderRadius:16,marginBottom:20,boxShadow:"0 2px 8px rgba(0,0,0,.05)",overflow:"hidden"}}>
+
+          {/* Row 1: Filters — todas en una línea, fechas pareadas */}
+          <div style={{padding:"12px 16px",display:"flex",gap:8,alignItems:"center",borderBottom:`1px solid ${C.border}`,flexWrap:"wrap"}}>
+
+            <input ref={searchRef} placeholder="🔍 Buscar…" value={search} onChange={e=>setSearch(e.target.value)}
+              style={{...inputStyle,width:160,flex:"0 0 auto"}} />
+
+            {carteraTab !== "resumen" && gruposList.length>0 && (
+              <select value={filtroGrupo} onChange={e=>setFiltroGrupo(e.target.value)}
+                style={{...selectStyle,width:140,borderColor:filtroGrupo?C.blue:C.border,color:filtroGrupo?C.blue:C.text,fontWeight:filtroGrupo?700:400,flex:"0 0 auto"}}>
+                <option value="">🏨 Grupo</option>
+                {gruposList.map(g=><option key={g} value={g}>{g}</option>)}
+              </select>
+            )}
+
+            <ProveedorPicker curInvoices={curInvoices} filtroProveedores={filtroProveedores} setFiltroProveedores={setFiltroProveedores} inputStyle={inputStyle} C={C}/>
+
+            <select value={filters.clasificacion} onChange={e=>setFilters(f=>({...f,clasificacion:e.target.value}))}
+              style={{...selectStyle,width:165,flex:"0 0 auto"}}>
               <option value="">Todas las clasificaciones</option>
               {clases.map(c=><option key={c}>{c}</option>)}
             </select>
+
             {carteraTab !== "activas" && (
-              <select value={filters.estatus} onChange={e=>setFilters(f=>({...f,estatus:e.target.value}))} style={{...selectStyle,maxWidth:160}}>
+              <select value={filters.estatus} onChange={e=>setFilters(f=>({...f,estatus:e.target.value}))}
+                style={{...selectStyle,width:140,flex:"0 0 auto"}}>
                 <option value="">Todos los estatus</option>
                 {["Pendiente","Pagado","Vencido","Parcial"].map(s=><option key={s}>{s}</option>)}
               </select>
             )}
-            <input type="date" value={filters.fechaFrom} onChange={e=>setFilters(f=>({...f,fechaFrom:e.target.value}))} style={{...inputStyle,maxWidth:150}} title="Fecha desde"/>
-            <input type="date" value={filters.fechaTo} onChange={e=>setFilters(f=>({...f,fechaTo:e.target.value}))} style={{...inputStyle,maxWidth:150}} title="Fecha hasta"/>
-            <button onClick={()=>{setFilters({proveedor:"",clasificacion:"",estatus:"",fechaFrom:"",fechaTo:"",pagoFrom:"",pagoTo:""});setSearch("");setFiltroGrupo("");}} style={{...btnStyle,background:"#F1F5F9",color:C.text}}>Limpiar</button>
+
+            {(()=>{
+              const mesesEnConcepto=[...new Set(curInvoices.filter(i=>i.estatus!=="Pagado").map(i=>detectarMesCxP(i.concepto)).filter(Boolean))];
+              const hayNoIdent=curInvoices.filter(i=>i.estatus!=="Pagado"&&!detectarMesCxP(i.concepto)).length>0;
+              return(
+                <select value={filtroMesConcepto} onChange={e=>setFiltroMesConcepto(e.target.value)}
+                  style={{...selectStyle,width:172,borderColor:filtroMesConcepto?C.blue:C.border,color:filtroMesConcepto?C.blue:C.text,fontWeight:filtroMesConcepto?700:400,flex:"0 0 auto"}}>
+                  <option value="">📅 Mes en concepto</option>
+                  {["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"].filter(m=>mesesEnConcepto.includes(m)).map(m=>(
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                  {hayNoIdent&&<option value="__sin_mes__">⚠️ Sin mes identificado</option>}
+                </select>
+              );
+            })()}
+
+            {/* Fechas factura pareadas */}
+            <div style={{display:"flex",alignItems:"center",gap:4,flex:"0 0 auto"}}>
+              <input type="date" value={filters.fechaFrom} onChange={e=>setFilters(f=>({...f,fechaFrom:e.target.value}))}
+                style={{...inputStyle,width:136}} title="Fecha desde"/>
+              <span style={{color:C.muted,fontSize:12,padding:"0 2px"}}>—</span>
+              <input type="date" value={filters.fechaTo} onChange={e=>setFilters(f=>({...f,fechaTo:e.target.value}))}
+                style={{...inputStyle,width:136}} title="Fecha hasta"/>
+            </div>
+
+            {/* Fechas pago programado pareadas (Activas/Pagadas) */}
+            {carteraTab !== "resumen" && (
+              <div style={{display:"flex",alignItems:"center",gap:4,flex:"0 0 auto"}}>
+                <span style={{fontSize:11,color:C.muted,fontWeight:700,whiteSpace:"nowrap"}}>📅 Pago:</span>
+                <input type="date" value={filters.pagoFrom||""} onChange={e=>setFilters(f=>({...f,pagoFrom:e.target.value}))}
+                  style={{...inputStyle,width:136}}/>
+                <span style={{color:C.muted,fontSize:12,padding:"0 2px"}}>—</span>
+                <input type="date" value={filters.pagoTo||""} onChange={e=>setFilters(f=>({...f,pagoTo:e.target.value}))}
+                  style={{...inputStyle,width:136}}/>
+              </div>
+            )}
+
+            <div style={{flex:1,minWidth:4}}/>
+
+            {/* ✕ Limpiar — solo si hay algo activo */}
+            {(search||filters.clasificacion||filters.estatus||filters.fechaFrom||filters.fechaTo||filters.pagoFrom||filters.pagoTo||filtroGrupo||filtroProveedores.size>0||filtroMesConcepto) && (
+              <button onClick={()=>{setFilters({proveedor:"",clasificacion:"",estatus:"",fechaFrom:"",fechaTo:"",pagoFrom:"",pagoTo:""});setSearch("");setFiltroGrupo("");setFiltroProveedores(new Set());setFiltroMesConcepto("");}}
+                style={{padding:"6px 12px",borderRadius:8,border:`1px solid ${C.danger}`,background:"#FFEBEE",color:C.danger,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"inherit",flex:"0 0 auto",whiteSpace:"nowrap"}}>
+                ✕ Limpiar
+              </button>
+            )}
           </div>
-          {carteraTab !== "resumen" && (
-            <>
-            <div style={{display:"flex",gap:10,marginTop:10,alignItems:"center",flexWrap:"wrap"}}>
-              <span style={{fontSize:12,color:C.muted,fontWeight:600}}>📅 Fecha pago programado:</span>
-              <input type="date" value={filters.pagoFrom||""} onChange={e=>setFilters(f=>({...f,pagoFrom:e.target.value}))} style={{...inputStyle,maxWidth:150}}/>
-              <span style={{color:C.muted,fontSize:12}}>a</span>
-              <input type="date" value={filters.pagoTo||""} onChange={e=>setFilters(f=>({...f,pagoTo:e.target.value}))} style={{...inputStyle,maxWidth:150}}/>
-            </div>
-            <div style={{display:"flex",gap:8,marginTop:12,alignItems:"center",flexWrap:"wrap"}}>
-              <span style={{fontSize:13,color:C.muted,fontWeight:600}}>Agrupar por:</span>
-              {groupOptions.map(g=>(
-                <button key={g} onClick={()=>{setGrupoPor(g); if(grupo2===g) setGrupo2("");}} style={{padding:"4px 12px",borderRadius:20,border:`1px solid ${grupoPor===g?C.blue:C.border}`,background:grupoPor===g?"#E8F0FE":C.surface,color:grupoPor===g?C.blue:C.text,cursor:"pointer",fontSize:12,fontWeight:600}}>
-                  {g==="grupo"?"Grupo":g.charAt(0).toUpperCase()+g.slice(1)}
+
+          {/* Row 2: Agrupar (Activas/Pagadas) | Ver por Grupo (Resumen) + Nueva Factura */}
+          <div style={{padding:"8px 16px",background:"#FAFBFC",display:"flex",alignItems:"center",gap:8}}>
+            {carteraTab !== "resumen" ? (
+              <>
+                <span style={{fontSize:12,color:C.muted,fontWeight:600,whiteSpace:"nowrap"}}>Agrupar:</span>
+                {groupOptions.map(g=>(
+                  <button key={g} onClick={()=>{setGrupoPor(g);if(grupo2===g)setGrupo2("");}}
+                    style={{padding:"5px 13px",borderRadius:20,border:`1px solid ${grupoPor===g?C.blue:C.border}`,background:grupoPor===g?C.blue:"#fff",color:grupoPor===g?"#fff":C.text,cursor:"pointer",fontSize:12,fontWeight:grupoPor===g?700:500,fontFamily:"inherit",transition:"all .15s",whiteSpace:"nowrap"}}>
+                    {g==="grupo"?"Grupo":g.charAt(0).toUpperCase()+g.slice(1)}
+                  </button>
+                ))}
+                <span style={{width:1,height:20,background:C.border,margin:"0 4px",flexShrink:0}}/>
+                <span style={{fontSize:12,color:C.muted,fontWeight:600,whiteSpace:"nowrap"}}>Luego:</span>
+                <select value={grupo2} onChange={e=>setGrupo2(e.target.value)}
+                  style={{...selectStyle,width:150,fontSize:12,borderColor:grupo2?C.teal:C.border,color:grupo2?C.teal:C.text,fontWeight:grupo2?700:400}}>
+                  <option value="">Ninguno</option>
+                  {groupOptions.filter(g=>g!==grupoPor).map(g=>(
+                    <option key={g} value={g}>{g==="grupo"?"Grupo":g.charAt(0).toUpperCase()+g.slice(1)}</option>
+                  ))}
+                </select>
+                <div style={{flex:1}}/>
+                {!esConsulta && (
+                  <button onClick={()=>setModalInv({tipo:"Factura",fecha:today(),serie:"",folio:"",uuid:"",proveedor:"",clasificacion:clases[0],subtotal:"",iva:"",retIsr:0,retIva:0,total:"",montoPagado:0,concepto:"",diasCredito:30,vencimiento:"",estatus:"Pendiente",fechaProgramacion:"",diasFicticios:0,referencia:"",notas:"",moneda:currency})}
+                    style={{...btnStyle,padding:"7px 18px",fontSize:13,whiteSpace:"nowrap"}}>
+                    + Nueva Factura
+                  </button>
+                )}
+              </>
+            ) : (
+              <>
+                <button ref={grupoPickerBtnRef} onClick={()=>setGrupoPickerOpenMain(p=>!p)}
+                  style={{display:"flex",alignItems:"center",gap:6,padding:"6px 14px",border:`1px solid ${filtroGrupo?C.blue:C.border}`,borderRadius:10,background:filtroGrupo?"#E8F0FE":"#fff",color:filtroGrupo?C.blue:C.text,cursor:"pointer",fontSize:13,fontWeight:filtroGrupo?700:500,fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                  🏨 {filtroGrupo||"Ver por Grupo"} ▾
                 </button>
-              ))}
-              <span style={{fontSize:13,color:C.muted,marginLeft:12,fontWeight:600}}>y luego por:</span>
-              <button onClick={()=>setGrupo2("")} style={{padding:"4px 12px",borderRadius:20,border:`1px solid ${grupo2===""?C.blue:C.border}`,background:grupo2===""?"#E8F0FE":C.surface,color:grupo2===""?C.blue:C.text,cursor:"pointer",fontSize:12,fontWeight:600}}>Ninguno</button>
-              {groupOptions.filter(g=>g!==grupoPor).map(g=>(
-                <button key={g} onClick={()=>setGrupo2(g)} style={{padding:"4px 12px",borderRadius:20,border:`1px solid ${grupo2===g?C.teal:C.border}`,background:grupo2===g?"#E0F2F1":C.surface,color:grupo2===g?C.teal:C.text,cursor:"pointer",fontSize:12,fontWeight:600}}>
-                  {g==="grupo"?"Grupo":g.charAt(0).toUpperCase()+g.slice(1)}
-                </button>
-              ))}
-            </div>
-            </>
-          )}
+                {filtroGrupo && (
+                  <button onClick={()=>setFiltroGrupo("")}
+                    style={{padding:"5px 10px",borderRadius:8,border:`1px solid ${C.danger}`,background:"#FFEBEE",color:C.danger,cursor:"pointer",fontSize:12,fontFamily:"inherit"}}>✕</button>
+                )}
+                <div style={{flex:1}}/>
+                {!esConsulta && (
+                  <button onClick={()=>setModalInv({tipo:"Factura",fecha:today(),serie:"",folio:"",uuid:"",proveedor:"",clasificacion:clases[0],subtotal:"",iva:"",retIsr:0,retIva:0,total:"",montoPagado:0,concepto:"",diasCredito:30,vencimiento:"",estatus:"Pendiente",fechaProgramacion:"",diasFicticios:0,referencia:"",notas:"",moneda:currency})}
+                    style={{...btnStyle,padding:"7px 18px",fontSize:13,whiteSpace:"nowrap"}}>
+                    + Nueva Factura
+                  </button>
+                )}
+              </>
+            )}
+          </div>
         </div>
 
-        {/* Add button */}
-        <div style={{display:"flex",justifyContent:"flex-end",marginBottom:16}}>
-          {!esConsulta && <button onClick={()=>setModalInv({tipo:"Factura",fecha:today(),serie:"",folio:"",uuid:"",proveedor:"",clasificacion:clases[0],subtotal:"",iva:"",retIsr:0,retIva:0,total:"",montoPagado:0,concepto:"",diasCredito:30,vencimiento:"",estatus:"Pendiente",fechaProgramacion:"",diasFicticios:0,referencia:"",notas:"",moneda:currency})} style={btnStyle}>+ Nueva Factura</button>}
-        </div>
-        {/* Bulk edit toolbar */}
+        {/* Grupo picker dropdown for Resumen */}
+        {carteraTab==="resumen" && grupoPickerOpenMain && (()=>{
+          const rect = grupoPickerBtnRef.current?.getBoundingClientRect();
+          const top = rect ? rect.bottom + 6 : 300;
+          const left = rect ? rect.left : 200;
+          return(
+            <div style={{position:"fixed",inset:0,zIndex:500}} onClick={()=>setGrupoPickerOpenMain(false)}>
+              <div style={{position:"fixed",top,left,background:"#fff",border:`1px solid ${C.border}`,borderRadius:12,boxShadow:"0 8px 24px rgba(0,0,0,.2)",minWidth:220,overflow:"hidden",zIndex:501}}
+                onClick={e=>e.stopPropagation()}>
+                <div style={{padding:"10px 16px",background:C.navy,color:"#fff",fontWeight:700,fontSize:13}}>🏨 Seleccionar Grupo</div>
+                <div onClick={()=>{setFiltroGrupo("");setGrupoPickerOpenMain(false);}}
+                  style={{padding:"10px 16px",cursor:"pointer",fontSize:13,color:!filtroGrupo?C.blue:C.text,fontWeight:!filtroGrupo?700:400,background:!filtroGrupo?"#E8F0FE":"#fff",borderBottom:`1px solid ${C.border}`}}>
+                  Todos los grupos
+                </div>
+                {gruposList.map(g=>(
+                  <div key={g} onClick={()=>{setFiltroGrupo(g);setGrupoPickerOpenMain(false);}}
+                    style={{padding:"10px 16px",cursor:"pointer",fontSize:13,color:filtroGrupo===g?C.blue:C.text,fontWeight:filtroGrupo===g?700:400,background:filtroGrupo===g?"#E8F0FE":"#fff",borderBottom:`1px solid ${C.border}`}}
+                    onMouseEnter={e=>{if(filtroGrupo!==g)e.currentTarget.style.background="#F8FAFC";}}
+                    onMouseLeave={e=>{e.currentTarget.style.background=filtroGrupo===g?"#E8F0FE":"#fff";}}>
+                    {g}
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
         {selectedIds.size > 0 && (()=>{
           const selInvs = (invoices[currency]||[]).filter(i=>selectedIds.has(i.id));
           const selTotal = selInvs.reduce((s,i)=>s+(+i.total||0),0);
           const selSaldo = selInvs.reduce((s,i)=>s+((+i.total||0)-(+i.montoPagado||0)),0);
           return (
-          <div style={{background:"#E8F0FE",border:`2px solid ${C.blue}`,borderRadius:14,padding:"14px 20px",marginBottom:20,display:"flex",gap:12,alignItems:"center",flexWrap:"wrap",position:"sticky",top:0,zIndex:10,boxShadow:"0 4px 16px rgba(0,0,0,.1)"}}>
-            <div style={{fontWeight:700,color:C.blue,fontSize:14,marginRight:8}}>
+          <div style={{background:"#E8F0FE",border:`2px solid ${C.blue}`,borderRadius:14,padding:"16px 22px",marginBottom:20,display:"flex",gap:14,alignItems:"center",flexWrap:"wrap",position:"sticky",top:0,zIndex:10,boxShadow:"0 4px 16px rgba(0,0,0,.1)"}}>
+            <div style={{fontWeight:800,color:C.blue,fontSize:16,marginRight:8}}>
               ✅ {selectedIds.size} factura{selectedIds.size!==1?"s":""} seleccionada{selectedIds.size!==1?"s":""}
-              <span style={{fontWeight:600,fontSize:12,color:C.navy,marginLeft:10}}>Total: ${fmt(selTotal)} · Saldo: ${fmt(selSaldo)}</span>
+              <span style={{fontWeight:700,fontSize:14,color:C.navy,marginLeft:12}}>Total: ${fmt(selTotal)} · Saldo: ${fmt(selSaldo)}</span>
             </div>
-            <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",flex:1}}>
-              <select value={bulkClasif} onChange={e=>!esConsulta&&setBulkClasif(e.target.value)} style={{...selectStyle,maxWidth:160,padding:"6px 10px",fontSize:12}}>
+            <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap",flex:1}}>
+              <select value={bulkClasif} onChange={e=>!esConsulta&&setBulkClasif(e.target.value)} style={{...selectStyle,maxWidth:160,padding:"8px 12px",fontSize:13}}>
                 <option value="">Clasificación…</option>
                 {clases.map(c=><option key={c}>{c}</option>)}
               </select>
-              <select value={bulkEstatus} onChange={e=>setBulkEstatus(e.target.value)} style={{...selectStyle,maxWidth:140,padding:"6px 10px",fontSize:12}}>
+              <select value={bulkEstatus} onChange={e=>setBulkEstatus(e.target.value)} style={{...selectStyle,maxWidth:140,padding:"8px 12px",fontSize:13}}>
                 <option value="">Estatus…</option>
                 {["Pendiente","Pagado","Vencido","Parcial"].map(s=><option key={s}>{s}</option>)}
               </select>
-              {!esConsulta && <button onClick={applyBulkEdit} disabled={!bulkClasif&&!bulkEstatus} style={{...btnStyle,padding:"7px 18px",fontSize:13,opacity:(!bulkClasif&&!bulkEstatus)?0.5:1}}>
+              {!esConsulta && <button onClick={applyBulkEdit} disabled={!bulkClasif&&!bulkEstatus} style={{...btnStyle,padding:"9px 20px",fontSize:14,opacity:(!bulkClasif&&!bulkEstatus)?0.5:1}}>
                 Aplicar cambios
               </button>}
-              {!esConsulta && <span style={{width:1,height:24,background:C.border,margin:"0 4px"}}/>}
-              {!esConsulta && <button onClick={()=>setBulkPayModal("programado")} style={{...btnStyle,padding:"7px 14px",fontSize:12,background:"#F57F17",color:"#fff"}}>📅 Programar pago</button>}
-              {!esConsulta && <button onClick={()=>setBulkPayModal("realizado")} style={{...btnStyle,padding:"7px 14px",fontSize:12,background:C.ok,color:"#fff"}}>💰 Registrar pago</button>}
-              <button onClick={()=>{setSelectedIds(new Set());setBulkClasif("");setBulkEstatus("");setBulkPayModal(null);}} style={{...btnStyle,background:"#F1F5F9",color:C.text,padding:"7px 14px",fontSize:13}}>
+              {!esConsulta && <span style={{width:1,height:28,background:C.border,margin:"0 4px"}}/>}
+              {!esConsulta && <button onClick={()=>setBulkPayModal("programado")} style={{...btnStyle,padding:"9px 18px",fontSize:13,background:"#F57F17",color:"#fff"}}>📅 Programar pago</button>}
+              {!esConsulta && <button onClick={()=>setBulkPayModal("realizado")} style={{...btnStyle,padding:"9px 18px",fontSize:13,background:C.ok,color:"#fff"}}>💰 Registrar pago</button>}
+              <button onClick={()=>{setSelectedIds(new Set());setBulkClasif("");setBulkEstatus("");setBulkPayModal(null);}} style={{...btnStyle,background:"#F1F5F9",color:C.text,padding:"9px 16px",fontSize:14,fontWeight:700}}>
                 Cancelar
               </button>
             </div>
@@ -1218,50 +2121,130 @@ export default function CxpApp({ user, onLogout }) {
         })()}
         {/* ── PESTAÑA RESUMEN ── */}
         {carteraTab === "resumen" && (
+          <>
+          {/* Excel + PDF top right */}
+          <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginBottom:12}}>
+            <button id="cxp-excel-btn"
+              style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:10,border:"1px solid #2E7D32",background:"#E8F5E9",color:"#2E7D32",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
+              📊 Excel
+            </button>
+            <button id="cxp-pdf-btn"
+              style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:10,border:"1px solid #1565C0",background:"#E3F2FD",color:"#1565C0",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
+              🖨️ PDF / Imprimir
+            </button>
+          </div>
           <ResumenCartera
             invoices={curInvoices}
             suppliers={suppliers}
             currency={currency}
             filtroGrupo={filtroGrupo}
-            onVerFacturas={(proveedor) => {
-              setCarteraTab("activas");
-              setFilters(f=>({...f, proveedor}));
-            }}
+            setFiltroGrupo={setFiltroGrupo}
+            gruposList={gruposList}
+            filtroProveedores={filtroProveedores}
+            searchQuery={search}
+            filtroMesConcepto={filtroMesConcepto}
+            filtroClasif={filters.clasificacion}
+            filtroEstatus={filters.estatus}
+            excelBtnId="cxp-excel-btn"
+            pdfBtnId="cxp-pdf-btn"
             fmt={fmt}
             C={C}
           />
+          </>
         )}
 
         {/* ── PESTAÑAS ACTIVAS / PAGADAS ── */}
         {carteraTab !== "resumen" && (
         <>
-        {/* Grouped content */}
-        {Object.entries(grouped).map(([g1, data]) => (
-          <div key={g1} style={{marginBottom:24}}>
-            {/* Primary group header */}
-            <div style={{display:"flex",justifyContent:"space-between",padding:"10px 16px",background:C.navy,borderRadius:10,marginBottom:8}}>
-              <span style={{fontWeight:700,color:"#fff",fontSize:14}}>{grupoPor.charAt(0).toUpperCase()+grupoPor.slice(1)}: {g1||"—"}</span>
-              <span style={{fontSize:13,color:"#94A3B8"}}>
-                {(data.invoices || Object.values(data.subgroups||{}).flat()).length} facturas
-              </span>
-            </div>
-            {data.invoices ? (
-              /* Single grouping */
-              <>
-                <GroupHeader label={g1} invs={data.invoices}/>
-                <InvoiceTable invs={data.invoices}/>
-              </>
-            ) : (
-              /* Dual grouping */
-              Object.entries(data.subgroups).map(([g2, invs]) => (
-                <div key={g2} style={{marginLeft:16,marginBottom:16}}>
-                  <GroupHeader label={`${grupo2.charAt(0).toUpperCase()+grupo2.slice(1)}: ${g2}`} invs={invs}/>
-                  <InvoiceTable invs={invs}/>
+        {/* ── KPI Aging chips ── */}
+        {(()=>{
+          const pend = filtered.filter(i=>i.estatus!=="Pagado");
+          const sOf = i => (+i.total||0)-(+i.montoPagado||0);
+          const calcD = v => v?Math.ceil((new Date(v)-new Date(today()))/864e5):null;
+          const sumS = arr => arr.reduce((s,i)=>s+sOf(i),0);
+          const total = sumS(pend);
+          const corriente = sumS(pend.filter(i=>{ const d=calcD(i.vencimiento); return d===null||d>=0; }));
+          const v7   = sumS(pend.filter(i=>{ const d=calcD(i.vencimiento); return d!==null&&d<0&&Math.abs(d)<=7; }));
+          const v15  = sumS(pend.filter(i=>{ const d=calcD(i.vencimiento); return d!==null&&d<0&&Math.abs(d)>7&&Math.abs(d)<=15; }));
+          const v30  = sumS(pend.filter(i=>{ const d=calcD(i.vencimiento); return d!==null&&d<0&&Math.abs(d)>15&&Math.abs(d)<=30; }));
+          const v60  = sumS(pend.filter(i=>{ const d=calcD(i.vencimiento); return d!==null&&d<0&&Math.abs(d)>30&&Math.abs(d)<=60; }));
+          const vmas = sumS(pend.filter(i=>{ const d=calcD(i.vencimiento); return d!==null&&d<0&&Math.abs(d)>60; }));
+
+          const openChip=(title,items)=>{ setDashSearch("");setDashFilterProv("");setDashFilterClasif("");setDashFilterEstatus("");setDashGroupBy("");setDashSelectedIds(new Set());setDashBulkAutDir(""); setDashDetail({title,type:"invoices",items,grouped:true}); };
+
+          const chips = [
+            {l:"Saldo Total",      v:total,     c:"#fff",    bg:"#0F2D4A",border:"#0F2D4A", inv:pend},
+            {l:"Corriente",  v:corriente, c:"#1B5E20", bg:"#E8F5E9",border:"#A5D6A7", inv:pend.filter(i=>{const d=calcD(i.vencimiento);return d===null||d>=0;})},
+            {l:"Vencido 1-7 Días",  v:v7,        c:"#E65100", bg:"#FFF3E0",border:"#FFCC80", inv:pend.filter(i=>{const d=calcD(i.vencimiento);return d!==null&&d<0&&Math.abs(d)<=7;})},
+            {l:"Vencido 8-15 Días", v:v15,       c:"#BF360C", bg:"#FBE9E7",border:"#FF8A65", inv:pend.filter(i=>{const d=calcD(i.vencimiento);return d!==null&&d<0&&Math.abs(d)>7&&Math.abs(d)<=15;})},
+            {l:"Vencido 16-30 Días",v:v30,       c:"#fff",    bg:"#E53935",border:"#E53935", inv:pend.filter(i=>{const d=calcD(i.vencimiento);return d!==null&&d<0&&Math.abs(d)>15&&Math.abs(d)<=30;})},
+            {l:"Vencido 31-60 Días",v:v60,       c:"#fff",    bg:"#B71C1C",border:"#B71C1C", inv:pend.filter(i=>{const d=calcD(i.vencimiento);return d!==null&&d<0&&Math.abs(d)>30&&Math.abs(d)<=60;})},
+            {l:"Vencido +60 Días",  v:vmas,      c:"#fff",    bg:"#4A0000",border:"#4A0000", inv:pend.filter(i=>{const d=calcD(i.vencimiento);return d!==null&&d<0&&Math.abs(d)>60;})},
+          ].filter(k=>k.v>0);
+
+          if(!chips.length) return null;
+          return(
+            <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap"}}>
+              {chips.map(k=>(
+                <div key={k.l} onClick={()=>openChip(`${currency} — ${k.l}`,k.inv)}
+                  style={{background:k.bg,border:`2px solid ${k.border}`,borderRadius:14,padding:"14px 20px",cursor:"pointer",minWidth:130,transition:"all .15s",boxShadow:"0 2px 6px rgba(0,0,0,.08)"}}
+                  onMouseEnter={e=>{e.currentTarget.style.transform="scale(1.04)";e.currentTarget.style.boxShadow="0 6px 16px rgba(0,0,0,.15)";}}
+                  onMouseLeave={e=>{e.currentTarget.style.transform="scale(1)";e.currentTarget.style.boxShadow="0 2px 6px rgba(0,0,0,.08)";}}>
+                  <div style={{fontSize:10,color:k.c,fontWeight:700,textTransform:"uppercase",opacity:.85,marginBottom:4,letterSpacing:.5}}>{k.l}</div>
+                  <div style={{fontSize:20,fontWeight:900,color:k.c}}>${fmt(k.v)}</div>
+                  <div style={{fontSize:10,color:k.c,opacity:.75,marginTop:2}}>{k.inv.length} fact.</div>
                 </div>
-              ))
-            )}
-          </div>
-        ))}
+              ))}
+            </div>
+          );
+        })()}
+        {Object.entries(grouped).map(([g1, data]) => {
+          const invs = data.invoices || Object.values(data.subgroups||{}).flat();
+          const saldo = invs.filter(i=>i.estatus!=="Pagado").reduce((s,i)=>s+((+i.total||0)-(+i.montoPagado||0)),0);
+          const vencidas = invs.filter(i=>isOverdue(i.vencimiento,i.estatus)).length;
+          const expanded = expandedGroups.has(g1);
+          const toggle = () => setExpandedGroups(prev=>{const n=new Set(prev);n.has(g1)?n.delete(g1):n.add(g1);return n;});
+          return(
+            <div key={g1} style={{marginBottom:12,border:`1px solid ${expanded?"#90CAF9":C.border}`,borderRadius:12,overflow:"hidden",transition:"border-color .2s"}}>
+              {/* Accordion header */}
+              <div onClick={toggle} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 18px",background:expanded?"#E8F0FE":"#F8FAFC",cursor:"pointer",transition:"background .15s"}}
+                onMouseEnter={e=>{if(!expanded)e.currentTarget.style.background="#F0F4FF";}}
+                onMouseLeave={e=>{if(!expanded)e.currentTarget.style.background="#F8FAFC";}}>
+                <div style={{display:"flex",alignItems:"center",gap:12}}>
+                  <span style={{fontSize:13,color:expanded?C.blue:C.muted,transition:"transform .2s",display:"inline-block",transform:expanded?"rotate(90deg)":"rotate(0deg)"}}>▶</span>
+                  <div>
+                    <span style={{fontWeight:800,fontSize:15,color:C.navy}}>{g1||"—"}</span>
+                    <span style={{fontSize:12,color:C.muted,marginLeft:10}}>{invs.length} factura{invs.length!==1?"s":""}</span>
+                    {vencidas>0 && <span style={{marginLeft:8,background:"#FFEBEE",color:C.danger,fontWeight:700,fontSize:11,padding:"1px 8px",borderRadius:20}}>⚠️ {vencidas} vencida{vencidas!==1?"s":""}</span>}
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:20,alignItems:"center"}}>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontSize:13,color:C.muted,fontWeight:600}}>Saldo</div>
+                    <div style={{fontSize:16,fontWeight:800,color:saldo>0?C.warn:C.ok}}>${fmt(saldo)}</div>
+                  </div>
+                </div>
+              </div>
+              {/* Accordion content */}
+              {expanded && (
+                <div>
+                  {data.invoices ? (
+                    <>
+                      <InvoiceTable invs={data.invoices}/>
+                    </>
+                  ) : (
+                    Object.entries(data.subgroups).map(([g2, invs2]) => (
+                      <div key={g2} style={{marginLeft:16,marginBottom:16}}>
+                        <GroupHeader label={`${grupo2.charAt(0).toUpperCase()+grupo2.slice(1)}: ${g2}`} invs={invs2}/>
+                        <InvoiceTable invs={invs2}/>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
         {filtered.length===0 && carteraTab !== "resumen" && (
           <div style={{textAlign:"center",padding:60,color:C.muted}}>
             <div style={{fontSize:48,marginBottom:12}}>📭</div>
@@ -1890,6 +2873,12 @@ export default function CxpApp({ user, onLogout }) {
             empresaId={empresaId}
             clientes={clientes}
             esConsulta={esConsulta}
+            porFacturar={porFacturar}
+            setPorFacturar={setPorFacturar}
+            insertPorFacturar={insertPorFacturar}
+            updatePorFacturar={updatePorFacturar}
+            deletePorFacturar={deletePorFacturar}
+            bulkInsertPorFacturar={bulkInsertPorFacturar}
           />
         )}
 
@@ -1971,7 +2960,7 @@ export default function CxpApp({ user, onLogout }) {
           <div style={{overflowX:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
             <thead><tr style={{background:"#F8FAFC"}}>
-              {["Folio","Concepto","Clasificación","Fecha","Total","Pagado","Saldo","Vencimiento","Moneda"].map(h=><th key={h} style={{padding:"10px 12px",textAlign:"left",color:C.muted,fontWeight:600,fontSize:11,textTransform:"uppercase"}}>{h}</th>)}
+              {["Folio","Concepto","Clasificación","Fecha","Total","Pagado","Saldo Total","Vencimiento","Moneda"].map(h=><th key={h} style={{padding:"10px 12px",textAlign:"left",color:C.muted,fontWeight:600,fontSize:11,textTransform:"uppercase"}}>{h}</th>)}
             </tr></thead>
             <tbody>
               {projDetail.invoices.map(inv=>(
@@ -2315,7 +3304,7 @@ export default function CxpApp({ user, onLogout }) {
                     <th style={{padding:"7px 4px",textAlign:"center",width:32}}>
                       <input type="checkbox" checked={allChecked} onChange={toggleDashSelAll} style={{cursor:"pointer",width:15,height:15,accentColor:C.blue}}/>
                     </th>
-                    {["Folio","Proveedor","Concepto","Clasif.","Fecha","Total","Pagado","Saldo","Vence","Días","Estatus","Aut.Dir.","Moneda"].map(h=>(
+                    {["Folio","Proveedor","Concepto","Clasif.","Fecha","Total","Pagado","Saldo Total","Vence","Días","Estatus","Aut.Dir.","Moneda"].map(h=>(
                       <th key={h} style={{padding:"7px 6px",textAlign:"left",color:C.muted,fontWeight:600,fontSize:10,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
                     ))}
                   </tr></thead>
@@ -2780,190 +3769,757 @@ function ClientesView({ clientes, setClientes, empresaId, esConsulta = false }) 
 }
 
 /* ── ResumenCartera component ────────────────────────────────────────── */
-function ResumenCartera({ invoices, suppliers, currency, filtroGrupo, onVerFacturas, fmt, C }) {
-  const sym = currency === "USD" ? "$" : currency === "EUR" ? "€" : "$";
+function ResumenCartera({ invoices, suppliers, currency, filtroGrupo, setFiltroGrupo, gruposList, filtroProveedores, searchQuery, filtroMesConcepto, filtroClasif, filtroEstatus, excelBtnId, pdfBtnId, fmt, C }) {
   const hoy = new Date().toISOString().slice(0,10);
+  const [detailModal, setDetailModal] = React.useState(null);
+  const [grupoPickerOpen, setGrupoPickerOpen] = React.useState(false);
+  const [expandedGruposMon, setExpandedGruposMon] = React.useState(new Set());
+  const [expandedProveedores, setExpandedProveedores] = React.useState(new Set());
+  const toggleProv = (key) => setExpandedProveedores(prev => { const n=new Set(prev); n.has(key)?n.delete(key):n.add(key); return n; });
+  const toggleGrupoMon = (key) => setExpandedGruposMon(prev => { const n=new Set(prev); n.has(key)?n.delete(key):n.add(key); return n; });
 
-  // Compute aging buckets for a saldo given vencimiento
+  const calcDias = (venc) => venc ? Math.ceil((new Date(venc)-new Date(hoy))/864e5) : null;
+
+  // Wire external Excel/PDF buttons
+  React.useEffect(()=>{
+    const excelBtn = excelBtnId ? document.getElementById(excelBtnId) : null;
+    const pdfBtn   = pdfBtnId   ? document.getElementById(pdfBtnId)   : null;
+    const doExcel = () => exportExcel();
+    const doPdf   = () => printResumen();
+    if(excelBtn) excelBtn.addEventListener('click', doExcel);
+    if(pdfBtn)   pdfBtn.addEventListener('click',   doPdf);
+    return () => {
+      if(excelBtn) excelBtn.removeEventListener('click', doExcel);
+      if(pdfBtn)   pdfBtn.removeEventListener('click',   doPdf);
+    };
+  });
+
   const aging = (saldo, vencimiento, estatus) => {
-    if(estatus === "Pagado" || saldo <= 0) return {corriente:0,v7:0,v15:0,v30:0,v60:0,vmas:0};
+    if(estatus==="Pagado"||saldo<=0) return {corriente:0,v7:0,v15:0,v30:0,v60:0,vmas:0};
     if(!vencimiento) return {corriente:saldo,v7:0,v15:0,v30:0,v60:0,vmas:0};
-    const dias = Math.ceil((new Date(vencimiento) - new Date(hoy)) / 864e5);
-    if(dias >= 0) return {corriente:saldo,v7:0,v15:0,v30:0,v60:0,vmas:0};
-    const d = Math.abs(dias);
-    if(d <= 7)  return {corriente:0,v7:saldo,v15:0,v30:0,v60:0,vmas:0};
-    if(d <= 15) return {corriente:0,v7:0,v15:saldo,v30:0,v60:0,vmas:0};
-    if(d <= 30) return {corriente:0,v7:0,v15:0,v30:saldo,v60:0,vmas:0};
-    if(d <= 60) return {corriente:0,v7:0,v15:0,v30:0,v60:saldo,vmas:0};
+    const d2 = calcDias(vencimiento);
+    if(d2>=0) return {corriente:saldo,v7:0,v15:0,v30:0,v60:0,vmas:0};
+    const d=Math.abs(d2);
+    if(d<=7)  return {corriente:0,v7:saldo,v15:0,v30:0,v60:0,vmas:0};
+    if(d<=15) return {corriente:0,v7:0,v15:saldo,v30:0,v60:0,vmas:0};
+    if(d<=30) return {corriente:0,v7:0,v15:0,v30:saldo,v60:0,vmas:0};
+    if(d<=60) return {corriente:0,v7:0,v15:0,v30:0,v60:saldo,vmas:0};
     return {corriente:0,v7:0,v15:0,v30:0,v60:0,vmas:saldo};
   };
+  const addAging=(acc,a)=>{acc.corriente+=a.corriente;acc.v7+=a.v7;acc.v15+=a.v15;acc.v30+=a.v30;acc.v60+=a.v60;acc.vmas+=a.vmas;};
+  const zeroAging=()=>({corriente:0,v7:0,v15:0,v30:0,v60:0,vmas:0});
 
-  const addAging = (acc, a) => {
-    acc.corriente += a.corriente; acc.v7 += a.v7; acc.v15 += a.v15;
-    acc.v30 += a.v30; acc.v60 += a.v60; acc.vmas += a.vmas;
+  const activeInvoices = React.useMemo(()=>invoices.filter(i=>{
+    if(i.estatus==="Pagado") return false;
+    if(filtroClasif && i.clasificacion!==filtroClasif) return false;
+    if(filtroEstatus && i.estatus!==filtroEstatus) return false;
+    if(filtroMesConcepto) {
+      if(filtroMesConcepto==="__sin_mes__") { if(detectarMesCxP(i.concepto)!==null) return false; }
+      else { if(detectarMesCxP(i.concepto)!==filtroMesConcepto) return false; }
+    }
+    return true;
+  }),[invoices, filtroMesConcepto, filtroClasif, filtroEstatus]);
+  const currencies = ["MXN","USD","EUR"];
+  const monedaSym = m=>m==="EUR"?"€":"$";
+  const monedaFlag = {MXN:"🇲🇽",USD:"🇺🇸",EUR:"🇪🇺"};
+  const monedaColor = {MXN:C.mxn,USD:C.usd,EUR:C.eur};
+  const monedaBg = {MXN:"#E3F2FD",USD:"#E8F5E9",EUR:"#F3E5F5"};
+
+  // ── Export to Excel ──
+  const exportExcel = () => {
+    const XLSX2 = XLSX;
+    const hoy2 = new Date().toLocaleDateString('es-MX');
+    const wb = XLSX2.utils.book_new();
+    const titulo = filtroGrupo ? `Grupo ${filtroGrupo}` : "Todos los Proveedores";
+    currencies.forEach(mon => {
+      const fpArr = filtroProveedores ? [...filtroProveedores] : [];
+      const invs = activeInvoices.filter(i=>(i.moneda||"MXN")===mon && (fpArr.length===0||fpArr.includes(i.proveedor)));
+      if(!invs.length) return;
+      const map = {};
+      invs.forEach(inv=>{
+        const p=inv.proveedor||"—";
+        if(filtroGrupo && (suppliers.find(s=>s.nombre===p)?.grupo||"")!==filtroGrupo) return;
+        if(!map[p]) map[p]={nombre:p,total:0,pagado:0,saldo:0,count:0,corriente:0,v7:0,v15:0,v30:0,v60:0,vmas:0};
+        const saldo=(+inv.total||0)-(+inv.montoPagado||0);
+        map[p].total+=(+inv.total||0); map[p].pagado+=(+inv.montoPagado||0); map[p].saldo+=saldo; map[p].count+=1;
+        const a=aging(saldo,inv.vencimiento,inv.estatus);
+        map[p].corriente+=a.corriente; map[p].v7+=a.v7; map[p].v15+=a.v15; map[p].v30+=a.v30; map[p].v60+=a.v60; map[p].vmas+=a.vmas;
+      });
+      const rows = Object.values(map).filter(p=>p.total>0).sort((a,b)=>b.saldo-a.saldo);
+      if(!rows.length) return;
+      const headers = ["Proveedor","# Facturas","Total","Pagado","Saldo Total","Corriente","Vencido 1-7 Días","Vencido 8-15 Días","Vencido 16-30 Días","Vencido 31-60 Días","Vencido +60 Días"];
+      const data = [
+        [`Reporte de Cartera — ${titulo} — ${mon}`, "", `Fecha: ${hoy2}`],
+        [],
+        headers,
+        ...rows.map(p=>[p.nombre,p.count,p.total,p.pagado,p.saldo,p.corriente,p.v7,p.v15,p.v30,p.v60,p.vmas]),
+        [],
+        ["TOTAL",rows.reduce((s,p)=>s+p.count,0),rows.reduce((s,p)=>s+p.total,0),rows.reduce((s,p)=>s+p.pagado,0),rows.reduce((s,p)=>s+p.saldo,0),rows.reduce((s,p)=>s+p.corriente,0),rows.reduce((s,p)=>s+p.v7,0),rows.reduce((s,p)=>s+p.v15,0),rows.reduce((s,p)=>s+p.v30,0),rows.reduce((s,p)=>s+p.v60,0),rows.reduce((s,p)=>s+p.vmas,0)],
+      ];
+      const ws = XLSX2.utils.aoa_to_sheet(data);
+      ws['!cols'] = [{wch:35},{wch:10},{wch:14},{wch:14},{wch:14},{wch:14},{wch:16},{wch:16},{wch:16},{wch:16},{wch:14}];
+      XLSX2.utils.book_append_sheet(wb, ws, mon);
+    });
+    const fecha = new Date().toISOString().slice(0,10);
+    XLSX2.writeFile(wb, `Resumen_Cartera_${fecha}.xlsx`);
   };
 
-  const zeroAging = () => ({corriente:0,v7:0,v15:0,v30:0,v60:0,vmas:0});
-
-  // Build per-proveedor summary
-  const byProveedor = useMemo(() => {
-    const map = {};
-    invoices.forEach(inv => {
-      const p = inv.proveedor || "—";
-      if(!map[p]) {
-        const sup = suppliers.find(s=>s.nombre===p);
-        map[p] = { nombre:p, grupo:sup?.grupo||"", total:0, pagado:0, saldo:0, count:0, ...zeroAging() };
+  // ── Print / PDF ──
+  const printResumen = () => {
+    const hoy2 = new Date().toLocaleDateString('es-MX');
+    const titulo = filtroGrupo ? `Grupo: ${filtroGrupo}` : "Todos los Proveedores";
+    const fpArr = filtroProveedores ? [...filtroProveedores] : [];
+    let html = `<html><head><meta charset="utf-8"><title>Resumen Cartera</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 9px; color: #1A2332; padding: 10mm; }
+      h1 { font-size: 13px; color: #0F2D4A; margin-bottom: 2px; }
+      .sub { font-size: 8px; color: #64748B; margin-bottom: 10px; }
+      h2 { font-size: 10px; color: #1565C0; margin: 10px 0 5px; }
+      table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+      th { background: #0F2D4A; color: #fff; padding: 5px 6px; text-align: center; font-size: 8px; text-transform: uppercase; white-space: nowrap; overflow: hidden; }
+      th:first-child { text-align: left; width: 22%; }
+      td { padding: 5px 6px; border-bottom: 1px solid #E2E8F0; text-align: right; font-size: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      td:first-child { text-align: left; font-weight: 600; }
+      td:nth-child(2) { text-align: center; width: 5%; }
+      tr:nth-child(even) { background: #F8FAFC; }
+      .total-row { background: #EEF2FF !important; font-weight: 800; border-top: 2px solid #0F2D4A; }
+      .danger { color: #E53935; font-weight: 700; }
+      .ok { color: #43A047; }
+      .navy { color: #0F2D4A; font-weight: 800; }
+      .muted { color: #94A3B8; }
+      @page { size: A4 landscape; margin: 8mm; }
+      @media print {
+        body { padding: 0; }
+        html, body { width: 100%; }
       }
-      const saldo = (+inv.total||0) - (+inv.montoPagado||0);
-      map[p].total  += +inv.total||0;
-      map[p].pagado += +inv.montoPagado||0;
-      map[p].saldo  += saldo;
-      map[p].count  += 1;
-      addAging(map[p], aging(saldo, inv.vencimiento, inv.estatus));
-    });
-    return Object.values(map).filter(p=>p.total>0).sort((a,b)=>b.saldo-a.saldo);
-  }, [invoices, suppliers]);
+    </style></head><body>
+    <h1>📋 Resumen de Cartera — ${titulo}</h1>
+    <div class="sub">Fecha: ${hoy2} &nbsp;·&nbsp; Solo facturas activas (Pendientes, Vencidas, Parciales)</div>`;
 
-  // Group by grupo empresarial
-  const byGrupo = useMemo(() => {
+    currencies.forEach(mon=>{
+      const invs = activeInvoices.filter(i=>(i.moneda||"MXN")===mon && (fpArr.length===0||fpArr.includes(i.proveedor)));
+      if(!invs.length) return;
+      const map={};
+      invs.forEach(inv=>{
+        const p=inv.proveedor||"—";
+        if(filtroGrupo && (suppliers.find(s=>s.nombre===p)?.grupo||"")!==filtroGrupo) return;
+        if(!map[p]) map[p]={nombre:p,total:0,pagado:0,saldo:0,count:0,corriente:0,v7:0,v15:0,v30:0,v60:0,vmas:0};
+        const s=(+inv.total||0)-(+inv.montoPagado||0);
+        map[p].total+=(+inv.total||0); map[p].pagado+=(+inv.montoPagado||0); map[p].saldo+=s; map[p].count+=1;
+        const a=aging(s,inv.vencimiento,inv.estatus);
+        map[p].corriente+=a.corriente; map[p].v7+=a.v7; map[p].v15+=a.v15; map[p].v30+=a.v30; map[p].v60+=a.v60; map[p].vmas+=a.vmas;
+      });
+      const rows=Object.values(map).filter(p=>p.total>0).sort((a,b)=>b.saldo-a.saldo);
+      if(!rows.length) return;
+      const sym=monedaSym(mon);
+      const f=v=>v.toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2});
+      const c=v=>v>0?`<span class="danger">${sym}${f(v)}</span>`:`<span style="color:#94A3B8">—</span>`;
+      const grand={total:0,pagado:0,saldo:0,count:0,corriente:0,v7:0,v15:0,v30:0,v60:0,vmas:0};
+      rows.forEach(p=>{Object.keys(grand).forEach(k=>grand[k]+=p[k]||0);});
+      html+=`<h2>${{MXN:"🇲🇽",USD:"🇺🇸",EUR:"🇪🇺"}[mon]} ${mon} — ${rows.length} proveedores · ${rows.reduce((s,p)=>s+p.count,0)} facturas</h2>
+      <table><thead><tr>
+        <th>Proveedor</th><th># Fact</th><th>Total</th><th>Pagado</th><th>Saldo</th>
+        <th>Corriente</th><th>Venc 1-7d</th><th>Venc 8-15d</th><th>Venc 16-30d</th><th>Venc 31-60d</th><th>Venc +60d</th>
+      </tr></thead><tbody>`;
+      rows.forEach(p=>{
+        html+=`<tr>
+          <td>${p.nombre}</td><td style="text-align:center">${p.count}</td>
+          <td>${sym}${f(p.total)}</td><td class="ok">${sym}${f(p.pagado)}</td>
+          <td class="navy"><strong>${sym}${f(p.saldo)}</strong></td>
+          <td class="ok">${p.corriente>0?sym+f(p.corriente):'<span style="color:#94A3B8">—</span>'}</td>
+          <td>${c(p.v7)}</td><td>${c(p.v15)}</td><td>${c(p.v30)}</td><td>${c(p.v60)}</td><td>${c(p.vmas)}</td>
+        </tr>`;
+      });
+      html+=`<tr class="total-row">
+        <td>TOTAL</td><td style="text-align:center">${grand.count}</td>
+        <td>${sym}${f(grand.total)}</td><td class="ok">${sym}${f(grand.pagado)}</td>
+        <td class="navy"><strong>${sym}${f(grand.saldo)}</strong></td>
+        <td class="ok">${grand.corriente>0?sym+f(grand.corriente):'—'}</td>
+        <td>${grand.v7>0?`<span class="danger">${sym}${f(grand.v7)}</span>`:'—'}</td>
+        <td>${grand.v15>0?`<span class="danger">${sym}${f(grand.v15)}</span>`:'—'}</td>
+        <td>${grand.v30>0?`<span class="danger">${sym}${f(grand.v30)}</span>`:'—'}</td>
+        <td>${grand.v60>0?`<span class="danger">${sym}${f(grand.v60)}</span>`:'—'}</td>
+        <td>${grand.vmas>0?`<span class="danger">${sym}${f(grand.vmas)}</span>`:'—'}</td>
+      </tr></tbody></table>`;
+    });
+    html+=`</body></html>`;
+    const w=window.open('','_blank','width=1200,height=800');
+    w.document.write(html);
+    w.document.close();
+    w.onload=()=>{ w.focus(); w.print(); };
+  };
+
+  // Build per-proveedor+moneda data
+  const allProvData = React.useMemo(()=>{
+    const fpArr = filtroProveedores ? [...filtroProveedores] : [];
     const map = {};
-    byProveedor.forEach(p => {
-      const g = p.grupo || "Sin Grupo";
-      if(!map[g]) map[g] = { nombre:g, proveedores:[], total:0, pagado:0, saldo:0, count:0, ...zeroAging() };
-      map[g].proveedores.push(p);
-      map[g].total  += p.total;
-      map[g].pagado += p.pagado;
-      map[g].saldo  += p.saldo;
-      map[g].count  += p.count;
-      addAging(map[g], p);
+    activeInvoices.forEach(inv=>{
+      const p=inv.proveedor||"—";
+      if(fpArr.length>0 && !fpArr.includes(p)) return;
+      const mon=(inv.moneda||"MXN");
+      const key=`${p}||${mon}`;
+      if(!map[key]){
+        const sup=suppliers.find(s=>s.nombre===p);
+        map[key]={nombre:p,grupo:sup?.grupo||"",moneda:mon,total:0,pagado:0,saldo:0,count:0,invoices:[],...zeroAging()};
+      }
+      const saldo=(+inv.total||0)-(+inv.montoPagado||0);
+      map[key].total+=(+inv.total||0);
+      map[key].pagado+=(+inv.montoPagado||0);
+      map[key].saldo+=saldo;
+      map[key].count+=1;
+      map[key].invoices.push(inv);
+      addAging(map[key],aging(saldo,inv.vencimiento,inv.estatus));
     });
-    return Object.values(map).sort((a,b)=>b.saldo-a.saldo);
-  }, [byProveedor]);
+    return Object.values(map);
+  },[activeInvoices, suppliers, filtroProveedores]);
 
-  const [expandedGrupos, setExpandedGrupos] = useState(new Set());
-  const toggleGrupo = (g) => setExpandedGrupos(prev => { const n=new Set(prev); n.has(g)?n.delete(g):n.add(g); return n; });
+  // Flat proveedor list (no grouping) — filtered by search
+  const provFlat = React.useMemo(()=>{
+    // Merge same proveedor across monedas for flat view
+    const map={};
+    allProvData.forEach(p=>{
+      if(searchQuery && !p.nombre.toLowerCase().includes(searchQuery.toLowerCase())) return;
+      if(!map[p.nombre]) map[p.nombre]={nombre:p.nombre,grupo:p.grupo,byMon:{}};
+      map[p.nombre].byMon[p.moneda]=p;
+    });
+    return Object.values(map).sort((a,b)=>{
+      const sA=Object.values(a.byMon).reduce((s,v)=>s+v.saldo,0);
+      const sB=Object.values(b.byMon).reduce((s,v)=>s+v.saldo,0);
+      return sB-sA;
+    });
+  },[allProvData,searchQuery]);
 
-  const displayed = filtroGrupo ? byGrupo.filter(g=>g.nombre===filtroGrupo) : byGrupo;
+  // Group view — only when filtroGrupo is set
+  const grupoData = React.useMemo(()=>{
+    if(!filtroGrupo) return null;
+    const byMon={};
+    allProvData.forEach(p=>{
+      if(p.grupo !== filtroGrupo) return;
+      const mon=p.moneda;
+      if(!byMon[mon]) byMon[mon]={total:0,pagado:0,saldo:0,count:0,...zeroAging(),proveedores:[]};
+      byMon[mon].proveedores.push(p);
+      byMon[mon].total+=p.total; byMon[mon].pagado+=p.pagado; byMon[mon].saldo+=p.saldo; byMon[mon].count+=p.count;
+      addAging(byMon[mon],p);
+    });
+    return byMon;
+  },[allProvData,filtroGrupo]);
 
-  const grand = displayed.reduce((acc,g) => {
-    acc.total+=g.total; acc.pagado+=g.pagado; acc.saldo+=g.saldo; acc.count+=g.count;
-    addAging(acc,g); return acc;
-  }, {total:0,pagado:0,saldo:0,count:0,...zeroAging()});
+  const openDetail=(title,invList,grouped=true)=>{ if(!invList||!invList.length) return; setDetailModal({title,invoices:invList,grouped}); };
 
-  const vCell = (v, intense=false) => v > 0
-    ? <span style={{fontWeight:700,color:intense?"#B71C1C":C.danger}}>{sym}{fmt(v)}</span>
-    : <span style={{color:C.muted,fontSize:11}}>—</span>;
+  const vCell=(v,sym,invList,label,color=C.danger)=>v>0?(
+    <span onClick={()=>openDetail(label,invList,true)}
+      style={{fontWeight:700,color,cursor:"pointer",borderBottom:`1px dotted ${color}`}}>
+      {sym}{fmt(v)}
+    </span>
+  ):<span style={{color:C.muted}}>—</span>;
 
-  const hdr = (label, right=true, color="#fff") => (
-    <th style={{padding:"9px 10px",textAlign:right?"right":"left",color,fontWeight:700,fontSize:10,textTransform:"uppercase",whiteSpace:"nowrap",borderRight:`1px solid rgba(255,255,255,0.1)`}}>{label}</th>
-  );
+  // Detail Modal — grouped by proveedor
+  const DetailModal=()=>{
+    if(!detailModal) return null;
+    const invs=detailModal.invoices;
+    const grouped=detailModal.grouped!==false;
+    const total=invs.reduce((s,i)=>s+(+i.total||0),0);
+    const pagado=invs.reduce((s,i)=>s+(+i.montoPagado||0),0);
+    const saldo=total-pagado;
+    const sym=invs[0]?monedaSym(invs[0].moneda||"MXN"):"$";
 
-  return (
-    <div>
-      {/* Grand total chips */}
-      <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}>
-        {[
-          {l:"# Facturas",    v:grand.count,     c:C.navy,   bg:"#EEF2FF", isNum:true},
-          {l:"Total",         v:grand.total,      c:C.navy,   bg:"#EEF2FF"},
-          {l:"Pagado",        v:grand.pagado,     c:C.ok,     bg:"#E8F5E9"},
-          {l:"Saldo",         v:grand.saldo,      c:C.navy,   bg:"#E8F0FE"},
-          {l:"Corriente",     v:grand.corriente,  c:C.ok,     bg:"#E8F5E9"},
-          {l:"Venc 1-7d",     v:grand.v7,         c:"#E57373",bg:"#FFF5F5"},
-          {l:"Venc 8-15d",    v:grand.v15,        c:C.danger, bg:"#FFEBEE"},
-          {l:"Venc 16-30d",   v:grand.v30,        c:"#C62828",bg:"#FFCDD2"},
-          {l:"Venc 31-60d",   v:grand.v60,        c:"#B71C1C",bg:"#EF9A9A"},
-          {l:"Venc +60d",     v:grand.vmas,       c:"#7F0000",bg:"#E57373"},
-        ].map(k=>(
-          <div key={k.l} style={{background:k.bg,borderRadius:10,padding:"10px 16px",minWidth:110}}>
-            <div style={{fontSize:10,color:C.muted,fontWeight:700,textTransform:"uppercase",marginBottom:3}}>{k.l}</div>
-            <div style={{fontSize:18,fontWeight:900,color:k.c}}>
-              {k.isNum ? k.v : <>{sym}{fmt(k.v)}</>}
+    // Group by proveedor
+    const byProv = grouped ? invs.reduce((acc,i)=>{
+      const p=i.proveedor||"—";
+      if(!acc[p]) acc[p]={proveedor:p,invs:[],saldo:0};
+      acc[p].invs.push(i);
+      acc[p].saldo+=((+i.total||0)-(+i.montoPagado||0));
+      return acc;
+    },{}) : null;
+    const provList = byProv ? Object.values(byProv).sort((a,b)=>b.saldo-a.saldo) : null;
+
+    const thead=(
+      <thead style={{position:"sticky",top:0}}>
+        <tr style={{background:C.navy}}>
+          {["Fecha","Folio","Proveedor","Concepto","Mes","Clasif.","Total","Pagado","Saldo Total","Vencimiento","Días","Estatus"].map(h=>(
+            <th key={h} style={{padding:"10px 12px",textAlign:["Total","Pagado","Saldo Total"].includes(h)?"right":"left",color:"#fff",fontWeight:700,fontSize:11,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
+          ))}
+        </tr>
+      </thead>
+    );
+
+    const InvRow=({inv,i})=>{
+      const saldoInv=(+inv.total||0)-(+inv.montoPagado||0);
+      const dias=calcDias(inv.vencimiento);
+      const mes=detectarMesCxP(inv.concepto);
+      return(
+        <tr style={{borderTop:`1px solid ${C.border}`,background:i%2===0?"#fff":"#FAFBFC"}}>
+          <td style={{padding:"10px 12px",fontSize:12,color:C.muted,whiteSpace:"nowrap"}}>{inv.fecha||"—"}</td>
+          <td style={{padding:"10px 12px",fontWeight:600,color:C.blue,whiteSpace:"nowrap"}}>{inv.serie}{inv.folio}</td>
+          <td style={{padding:"10px 12px",fontWeight:600,maxWidth:140,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{inv.proveedor}</td>
+          <td style={{padding:"10px 12px",fontSize:12,color:C.muted,maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{inv.concepto||"—"}</td>
+          <td style={{padding:"10px 12px"}}>
+            {mes?<span style={{background:"#E8EAF6",color:"#3949AB",padding:"2px 8px",borderRadius:20,fontSize:10,fontWeight:700,whiteSpace:"nowrap"}}>{mes}</span>:<span style={{color:C.muted,fontSize:11}}>—</span>}
+          </td>
+          <td style={{padding:"10px 12px"}}><span style={{background:"#EEF2FF",color:C.blue,padding:"2px 8px",borderRadius:20,fontSize:10,fontWeight:700,whiteSpace:"nowrap"}}>{inv.clasificacion}</span></td>
+          <td style={{padding:"10px 12px",textAlign:"right",fontWeight:700,whiteSpace:"nowrap"}}>{sym}{fmt(+inv.total||0)}</td>
+          <td style={{padding:"10px 12px",textAlign:"right",color:C.ok,whiteSpace:"nowrap"}}>{sym}{fmt(+inv.montoPagado||0)}</td>
+          <td style={{padding:"10px 12px",textAlign:"right",fontWeight:800,color:saldoInv>0?C.danger:C.ok,whiteSpace:"nowrap"}}>{sym}{fmt(saldoInv)}</td>
+          <td style={{padding:"10px 12px",fontSize:12,color:C.muted,whiteSpace:"nowrap"}}>{inv.vencimiento||"—"}</td>
+          <td style={{padding:"10px 12px",textAlign:"center"}}>
+            {dias===null?<span style={{color:C.muted}}>—</span>:dias<0?(
+              <span style={{background:"#FFEBEE",color:C.danger,fontWeight:800,fontSize:11,padding:"2px 7px",borderRadius:20,whiteSpace:"nowrap"}}>{Math.abs(dias)}d venc.</span>
+            ):<span style={{background:"#E8F5E9",color:C.ok,fontWeight:700,fontSize:11,padding:"2px 7px",borderRadius:20,whiteSpace:"nowrap"}}>{dias}d</span>}
+          </td>
+          <td style={{padding:"10px 12px"}}><span style={{background:`${statusColor(inv.estatus)}22`,color:statusColor(inv.estatus),border:`1px solid ${statusColor(inv.estatus)}`,padding:"2px 8px",borderRadius:20,fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>{inv.estatus}</span></td>
+        </tr>
+      );
+    };
+
+    return(
+      <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
+        onClick={()=>setDetailModal(null)}>
+        <div style={{background:"#fff",borderRadius:16,width:"100%",maxWidth:1300,maxHeight:"88vh",display:"flex",flexDirection:"column",boxShadow:"0 24px 64px rgba(0,0,0,.3)"}}
+          onClick={e=>e.stopPropagation()}>
+          <div style={{padding:"18px 28px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center",background:C.navy,borderRadius:"16px 16px 0 0"}}>
+            <div>
+              <div style={{fontWeight:800,fontSize:17,color:"#fff"}}>{detailModal.title}</div>
+              <div style={{fontSize:13,color:"#A5D6A7",marginTop:3}}>
+                {invs.length} factura{invs.length!==1?"s":""} · Saldo: <b>{sym}{fmt(saldo)}</b>
+                {grouped&&provList?` · ${provList.length} proveedor${provList.length!==1?"es":""}`:""}</div>
             </div>
+            <button onClick={()=>setDetailModal(null)} style={{background:"rgba(255,255,255,.15)",border:"none",borderRadius:8,width:34,height:34,cursor:"pointer",fontSize:20,color:"#fff"}}>×</button>
           </div>
-        ))}
+          <div style={{overflowY:"auto",flex:1}}>
+            {grouped && provList ? (
+              provList.map((pg,pi)=>(
+                <div key={pg.proveedor}>
+                  <div style={{background:"#EEF2FF",padding:"10px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",borderTop:pi>0?`3px solid #C5CAE9`:`1px solid ${C.border}`,position:"sticky",top:0,zIndex:2}}>
+                    <span style={{fontWeight:800,fontSize:14,color:C.navy}}>🏢 {pg.proveedor}</span>
+                    <div style={{display:"flex",gap:20,fontSize:13}}>
+                      <span style={{color:C.muted}}>{pg.invs.length} factura{pg.invs.length!==1?"s":""}</span>
+                      <span style={{color:C.danger,fontWeight:700}}>Saldo: {sym}{fmt(pg.saldo)}</span>
+                    </div>
+                  </div>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                    {thead}<tbody>{pg.invs.sort((a,b)=>(a.vencimiento||"").localeCompare(b.vencimiento||"")).map((inv,i)=><InvRow key={inv.id} inv={inv} i={i}/>)}</tbody>
+                  </table>
+                </div>
+              ))
+            ):(
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                {thead}<tbody>{invs.sort((a,b)=>(a.vencimiento||"").localeCompare(b.vencimiento||"")).map((inv,i)=><InvRow key={inv.id} inv={inv} i={i}/>)}</tbody>
+              </table>
+            )}
+          </div>
+          <div style={{padding:"14px 28px",borderTop:`1px solid ${C.border}`,display:"flex",gap:24,background:"#F8FAFC"}}>
+            <span style={{fontSize:13,color:C.muted}}>Total: <b style={{color:C.navy}}>{sym}{fmt(total)}</b></span>
+            <span style={{fontSize:13,color:C.muted}}>Pagado: <b style={{color:C.ok}}>{sym}{fmt(pagado)}</b></span>
+            <span style={{fontSize:13,color:C.muted}}>Saldo: <b style={{color:C.danger}}>{sym}{fmt(saldo)}</b></span>
+            {grouped&&provList&&<span style={{fontSize:13,color:C.muted}}>Proveedores: <b style={{color:C.navy}}>{provList.length}</b></span>}
+          </div>
+        </div>
       </div>
+    );
+  };
 
-      {/* Table */}
-      <div style={{background:"#fff",border:`1px solid ${C.border}`,borderRadius:14,overflow:"hidden"}}>
-        <div style={{overflowX:"auto"}}>
-          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:1200}}>
-            <thead>
-              <tr style={{background:C.navy}}>
-                {hdr("Grupo / Proveedor", false)}
-                {hdr("# Fact.")}
-                {hdr("Total")}
-                {hdr("Pagado")}
-                {hdr("Saldo")}
-                <th style={{padding:"9px 10px",textAlign:"right",color:"#A5D6A7",fontWeight:700,fontSize:10,textTransform:"uppercase",whiteSpace:"nowrap"}}>Corriente</th>
-                <th style={{padding:"9px 10px",textAlign:"right",color:"#FFCDD2",fontWeight:700,fontSize:10,textTransform:"uppercase",whiteSpace:"nowrap"}}>Venc 1-7d</th>
-                <th style={{padding:"9px 10px",textAlign:"right",color:"#EF9A9A",fontWeight:700,fontSize:10,textTransform:"uppercase",whiteSpace:"nowrap"}}>Venc 8-15d</th>
-                <th style={{padding:"9px 10px",textAlign:"right",color:"#EF9A9A",fontWeight:700,fontSize:10,textTransform:"uppercase",whiteSpace:"nowrap"}}>Venc 16-30d</th>
-                <th style={{padding:"9px 10px",textAlign:"right",color:"#EF9A9A",fontWeight:700,fontSize:10,textTransform:"uppercase",whiteSpace:"nowrap"}}>Venc 31-60d</th>
-                <th style={{padding:"9px 10px",textAlign:"right",color:"#EF9A9A",fontWeight:700,fontSize:10,textTransform:"uppercase",whiteSpace:"nowrap"}}>Venc +60d</th>
-                {hdr("")}
-              </tr>
-            </thead>
-            <tbody>
-              {displayed.map(grupo => {
-                const expanded = expandedGrupos.has(grupo.nombre);
-                return (
-                  <React.Fragment key={grupo.nombre}>
-                    {/* Grupo row */}
-                    <tr style={{background:"#F0F4FF",cursor:"pointer",borderTop:`2px solid ${C.border}`}} onClick={()=>toggleGrupo(grupo.nombre)}>
-                      <td style={{padding:"12px 14px",fontWeight:800,color:C.navy,fontSize:13}}>
+  // Grupo Picker Modal
+  const GrupoPicker=()=>{
+    if(!grupoPickerOpen) return null;
+    return(
+      <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.4)",zIndex:999,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
+        onClick={()=>setGrupoPickerOpen(false)}>
+        <div style={{background:"#fff",borderRadius:16,width:"100%",maxWidth:400,boxShadow:"0 24px 64px rgba(0,0,0,.25)",overflow:"hidden"}}
+          onClick={e=>e.stopPropagation()}>
+          <div style={{padding:"16px 20px",background:C.navy,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span style={{fontWeight:800,color:"#fff",fontSize:15}}>🏨 Seleccionar Grupo</span>
+            <button onClick={()=>setGrupoPickerOpen(false)} style={{background:"rgba(255,255,255,.15)",border:"none",borderRadius:6,color:"#fff",width:28,height:28,cursor:"pointer",fontSize:16}}>×</button>
+          </div>
+          <div style={{padding:"8px 0"}}>
+            {/* All option */}
+            <div onClick={()=>{setFiltroGrupo("");setGrupoPickerOpen(false);}}
+              style={{padding:"12px 20px",cursor:"pointer",fontSize:14,color:!filtroGrupo?C.blue:C.text,fontWeight:!filtroGrupo?700:400,background:!filtroGrupo?"#E8F0FE":"#fff",display:"flex",alignItems:"center",gap:8}}
+              onMouseEnter={e=>e.currentTarget.style.background=!filtroGrupo?"#E8F0FE":"#F0F4FF"}
+              onMouseLeave={e=>e.currentTarget.style.background=!filtroGrupo?"#E8F0FE":"#fff"}>
+              <span>📋</span> Todos los proveedores
+              {!filtroGrupo && <span style={{marginLeft:"auto",fontSize:12,color:C.blue}}>✓ Activo</span>}
+            </div>
+            {gruposList.length===0 && (
+              <div style={{padding:"20px",textAlign:"center",color:C.muted,fontSize:13,fontStyle:"italic"}}>
+                Sin grupos configurados.<br/>Asígnalos en Proveedores → Grupo Empresarial.
+              </div>
+            )}
+            {gruposList.map(g=>(
+              <div key={g} onClick={()=>{setFiltroGrupo(g);setGrupoPickerOpen(false);}}
+                style={{padding:"12px 20px",cursor:"pointer",fontSize:14,color:filtroGrupo===g?C.blue:C.text,fontWeight:filtroGrupo===g?700:400,background:filtroGrupo===g?"#E8F0FE":"#fff",display:"flex",alignItems:"center",gap:8}}
+                onMouseEnter={e=>e.currentTarget.style.background=filtroGrupo===g?"#E8F0FE":"#F0F4FF"}
+                onMouseLeave={e=>e.currentTarget.style.background=filtroGrupo===g?"#E8F0FE":"#fff"}>
+                <span>🏨</span> {g}
+                {filtroGrupo===g && <span style={{marginLeft:"auto",fontSize:12,color:C.blue}}>✓ Activo</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const COLS = ["# Facturas","Total","Pagado","Saldo Total","Corriente","Vencido 1-7 Días","Vencido 8-15 Días","Vencido 16-30 Días","Vencido 31-60 Días","Vencido +60 Días",""];
+
+  // Render flat proveedor table for a given moneda
+  const ProvTable=({mon, provs})=>{
+    const [expandedProveedores, setExpandedProveedores] = React.useState(new Set());
+    const [sortCol, setSortCol] = React.useState("saldo");
+    const [sortDir, setSortDir] = React.useState("desc");
+    const toggleSort = col => { if(sortCol===col) setSortDir(d=>d==="asc"?"desc":"asc"); else {setSortCol(col);setSortDir("desc");} };
+    const arrow = col => sortCol===col ? (sortDir==="asc"?" ↑":" ↓") : "";
+    const toggleProv = (key) => setExpandedProveedores(prev => { const n=new Set(prev); n.has(key)?n.delete(key):n.add(key); return n; });
+    const sym=monedaSym(mon);
+    const grand=provs.reduce((acc,p)=>{
+      acc.total+=p.total;acc.pagado+=p.pagado;acc.saldo+=p.saldo;acc.count+=p.count;addAging(acc,p);return acc;
+    },{total:0,pagado:0,saldo:0,count:0,...zeroAging()});
+    const allInvs=provs.flatMap(p=>p.invoices);
+    const filterInvs=(fn)=>allInvs.filter(inv=>{const d=calcDias(inv.vencimiento);return fn(d);});
+
+    const sortedProvs = [...provs].sort((a,b)=>{
+      let va,vb;
+      switch(sortCol){
+        case "nombre":  va=a.nombre||""; vb=b.nombre||""; break;
+        case "count":   va=a.count;       vb=b.count; break;
+        case "total":   va=a.total;       vb=b.total; break;
+        case "pagado":  va=a.pagado;      vb=b.pagado; break;
+        case "saldo":   va=a.saldo;       vb=b.saldo; break;
+        case "corriente":va=a.corriente||0;vb=b.corriente||0; break;
+        case "v7":      va=a.v7||0;       vb=b.v7||0; break;
+        case "v15":     va=a.v15||0;      vb=b.v15||0; break;
+        case "v30":     va=a.v30||0;      vb=b.v30||0; break;
+        case "v60":     va=a.v60||0;      vb=b.v60||0; break;
+        case "vmas":    va=a.vmas||0;     vb=b.vmas||0; break;
+        default:        va=a.saldo;       vb=b.saldo;
+      }
+      const cmp=typeof va==="number"?va-vb:String(va).localeCompare(String(vb));
+      return sortDir==="asc"?cmp:-cmp;
+    });
+
+    // Column definitions for header
+    const COL_DEFS = [
+      {k:"nombre",   l:"Proveedor",         align:"left"},
+      {k:"count",    l:"# Facturas",        align:"center"},
+      {k:"total",    l:"Total",             align:"center"},
+      {k:"pagado",   l:"Pagado",            align:"center"},
+      {k:"saldo",    l:"Saldo Total",       align:"center"},
+      {k:"corriente",l:"Corriente",         align:"center", hc:"#80CBC4"},
+      {k:"v7",       l:"Vencido 1-7 Días",  align:"center", hc:"#FFCC80"},
+      {k:"v15",      l:"Vencido 8-15 Días", align:"center", hc:"#FF8A65"},
+      {k:"v30",      l:"Vencido 16-30 Días",align:"center", hc:"#F1948A"},
+      {k:"v60",      l:"Vencido 31-60 Días",align:"center", hc:"#E57373"},
+      {k:"vmas",     l:"Vencido +60 Días",  align:"center", hc:"#FFCDD2"},
+      {k:"_",        l:"",                  align:"center"},
+    ];
+
+    return(
+      <div style={{marginBottom:28}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+          <span style={{fontSize:20}}>{monedaFlag[mon]}</span>
+          <span style={{fontSize:17,fontWeight:900,color:monedaColor[mon]}}>{mon}</span>
+          <span style={{fontSize:13,color:C.muted}}>{grand.count} facturas activas · {provs.length} proveedores</span>
+        </div>
+        {/* Chips — grande con paleta de urgencia */}
+        <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap"}}>
+          {[
+            {l:"Saldo Total",       v:grand.saldo,     c:"#fff",    bg:"#0F2D4A", border:"#0F2D4A", inv:allInvs},
+            {l:"Corriente",         v:grand.corriente, c:"#1B5E20", bg:"#E8F5E9", border:"#A5D6A7", inv:filterInvs(d=>d!==null&&d>=0)},
+            {l:"Vencido 1-7 Días",  v:grand.v7,        c:"#E65100", bg:"#FFF3E0", border:"#FFCC80", inv:filterInvs(d=>d!==null&&d<0&&Math.abs(d)<=7)},
+            {l:"Vencido 8-15 Días", v:grand.v15,       c:"#BF360C", bg:"#FBE9E7", border:"#FF8A65", inv:filterInvs(d=>d!==null&&d<0&&Math.abs(d)>7&&Math.abs(d)<=15)},
+            {l:"Vencido 16-30 Días",v:grand.v30,       c:"#fff",    bg:"#C0392B", border:"#C0392B", inv:filterInvs(d=>d!==null&&d<0&&Math.abs(d)>15&&Math.abs(d)<=30)},
+            {l:"Vencido 31-60 Días",v:grand.v60,       c:"#fff",    bg:"#B71C1C", border:"#B71C1C", inv:filterInvs(d=>d!==null&&d<0&&Math.abs(d)>30&&Math.abs(d)<=60)},
+            {l:"Vencido +60 Días",  v:grand.vmas,      c:"#fff",    bg:"#4A0000", border:"#4A0000", inv:filterInvs(d=>d!==null&&d<0&&Math.abs(d)>60)},
+          ].filter(k=>k.v>0).map(k=>(
+            <div key={k.l} onClick={()=>openDetail(`${mon} — ${k.l}`,k.inv,true)}
+              style={{background:k.bg,border:`2px solid ${k.border}`,borderRadius:16,padding:"16px 22px",cursor:"pointer",minWidth:150,flex:"1 1 150px",transition:"all .15s",boxShadow:"0 2px 6px rgba(0,0,0,.08)"}}
+              onMouseEnter={e=>{e.currentTarget.style.transform="scale(1.03)";e.currentTarget.style.boxShadow="0 6px 18px rgba(0,0,0,.15)";}}
+              onMouseLeave={e=>{e.currentTarget.style.transform="scale(1)";e.currentTarget.style.boxShadow="0 2px 6px rgba(0,0,0,.08)";}}>
+              <div style={{fontSize:12,color:k.c,fontWeight:800,textTransform:"uppercase",opacity:.9,marginBottom:6,letterSpacing:.5}}>{k.l}</div>
+              <div style={{fontSize:24,fontWeight:900,color:k.c,letterSpacing:-.5}}>{sym}{fmt(k.v)}</div>
+            </div>
+          ))}
+        </div>
+        {/* Table */}
+        <div style={{background:"#fff",border:`1px solid ${C.border}`,borderRadius:14,overflow:"hidden"}}>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,minWidth:1100}}>
+              <thead>
+                <tr style={{background:C.navy}}>
+                  {COL_DEFS.map(col=>(
+                    <th key={col.k} onClick={col.k!=="_"?()=>toggleSort(col.k):undefined}
+                      style={{padding:"13px 10px",textAlign:col.align||"center",
+                        color:sortCol===col.k?"#90CAF9":(col.hc||"#fff"),
+                        fontWeight:800,fontSize:12,textTransform:"uppercase",whiteSpace:"nowrap",
+                        cursor:col.k!=="_"?"pointer":"default",userSelect:"none",
+                        borderBottom:sortCol===col.k?"2px solid #90CAF9":"2px solid transparent",
+                        transition:"color .15s",letterSpacing:.3}}
+                      onMouseEnter={e=>{if(col.k!=="_")e.currentTarget.style.color="#fff";}}
+                      onMouseLeave={e=>{if(col.k!=="_")e.currentTarget.style.color=sortCol===col.k?"#90CAF9":(col.hc||"#fff");}}>
+                      {col.l}{arrow(col.k)}
+                    </th>
+                  ))}
+                </tr>
+                {/* Totals row */}
+                <tr style={{background:"#1A2F4A",borderBottom:`2px solid #2D4A6B`}}>
+                  <td style={{padding:"10px 14px",fontWeight:800,color:"#fff",fontSize:14}}>TOTAL ({provs.length} proveedores)</td>
+                  <td style={{padding:"10px 10px",textAlign:"center",fontWeight:700,color:"rgba(255,255,255,.75)",fontSize:13}}>{grand.count}</td>
+                  <td style={{padding:"10px 10px",textAlign:"center",fontWeight:700,color:"rgba(255,255,255,.75)",fontSize:13}}>{sym}{fmt(grand.total)}</td>
+                  <td style={{padding:"10px 10px",textAlign:"center",fontWeight:700,color:"rgba(255,255,255,.75)",fontSize:13}}>{sym}{fmt(grand.pagado)}</td>
+                  <td style={{padding:"10px 10px",textAlign:"center",fontWeight:900,color:"#fff",fontSize:15}}>{sym}{fmt(grand.saldo)}</td>
+                  <td style={{padding:"10px 10px",textAlign:"center",fontWeight:700,color:"rgba(255,255,255,.75)",fontSize:13}}>{grand.corriente>0?`${sym}${fmt(grand.corriente)}`:""}</td>
+                  <td style={{padding:"10px 10px",textAlign:"center",fontWeight:700,color:"rgba(255,255,255,.75)",fontSize:13}}>{grand.v7>0?`${sym}${fmt(grand.v7)}`:""}</td>
+                  <td style={{padding:"10px 10px",textAlign:"center",fontWeight:700,color:"rgba(255,255,255,.75)",fontSize:13}}>{grand.v15>0?`${sym}${fmt(grand.v15)}`:""}</td>
+                  <td style={{padding:"10px 10px",textAlign:"center",fontWeight:700,color:"rgba(255,255,255,.75)",fontSize:13}}>{grand.v30>0?`${sym}${fmt(grand.v30)}`:""}</td>
+                  <td style={{padding:"10px 10px",textAlign:"center",fontWeight:700,color:"rgba(255,255,255,.75)",fontSize:13}}>{grand.v60>0?`${sym}${fmt(grand.v60)}`:""}</td>
+                  <td style={{padding:"10px 10px",textAlign:"center",fontWeight:700,color:"rgba(255,255,255,.75)",fontSize:13}}>{grand.vmas>0?`${sym}${fmt(grand.vmas)}`:""}</td>
+                  <td/>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedProvs.map((p,pi)=>{
+                  const fi=(fn)=>p.invoices.filter(inv=>{const d=calcDias(inv.vencimiento);return fn(d);});
+                  const provKey=`${mon}-${p.nombre}`;
+                  const expanded=expandedProveedores.has(provKey);
+                  return(
+                    <React.Fragment key={p.nombre}>
+                    <tr style={{borderTop:`1px solid ${C.border}`,background:expanded?"#E8F0FE":pi%2===0?"#FAFBFF":"#fff",cursor:"pointer"}}
+                      onClick={()=>toggleProv(provKey)}
+                      onMouseEnter={e=>{if(!expanded)e.currentTarget.style.background="#F0F7FF";}}
+                      onMouseLeave={e=>{e.currentTarget.style.background=expanded?"#E8F0FE":pi%2===0?"#FAFBFF":"#fff";}}>
+                      <td style={{padding:"11px 14px",fontWeight:700,fontSize:14,color:C.navy}}>
                         <span style={{marginRight:8,fontSize:11,color:C.blue,display:"inline-block",transform:expanded?"rotate(90deg)":"rotate(0deg)",transition:"transform .2s"}}>▶</span>
-                        🏨 {grupo.nombre}
-                        <span style={{marginLeft:8,fontSize:11,color:C.muted,fontWeight:400}}>{grupo.proveedores.length} prov.</span>
+                        {p.nombre}
                       </td>
-                      <td style={{padding:"12px 10px",textAlign:"right",fontWeight:600,color:C.muted}}>{grupo.count}</td>
-                      <td style={{padding:"12px 10px",textAlign:"right",fontWeight:700}}>{sym}{fmt(grupo.total)}</td>
-                      <td style={{padding:"12px 10px",textAlign:"right",color:C.ok,fontWeight:700}}>{sym}{fmt(grupo.pagado)}</td>
-                      <td style={{padding:"12px 10px",textAlign:"right",fontWeight:900,color:C.navy,fontSize:14}}>{sym}{fmt(grupo.saldo)}</td>
-                      <td style={{padding:"12px 10px",textAlign:"right",color:C.ok,fontWeight:700}}>{grupo.corriente>0?sym+fmt(grupo.corriente):"—"}</td>
-                      <td style={{padding:"12px 10px",textAlign:"right"}}>{vCell(grupo.v7)}</td>
-                      <td style={{padding:"12px 10px",textAlign:"right"}}>{vCell(grupo.v15)}</td>
-                      <td style={{padding:"12px 10px",textAlign:"right"}}>{vCell(grupo.v30)}</td>
-                      <td style={{padding:"12px 10px",textAlign:"right"}}>{vCell(grupo.v60,true)}</td>
-                      <td style={{padding:"12px 10px",textAlign:"right"}}>{vCell(grupo.vmas,true)}</td>
-                      <td style={{padding:"12px 10px"}}/>
+                      <td style={{padding:"11px 10px",textAlign:"center",color:C.muted,fontSize:14}}>{p.count}</td>
+                      <td style={{padding:"11px 10px",textAlign:"center",fontWeight:600,fontSize:15}}>{sym}{fmt(p.total)}</td>
+                      <td style={{padding:"11px 10px",textAlign:"center",color:C.ok,fontWeight:600,fontSize:15}}>{sym}{fmt(p.pagado)}</td>
+                      <td style={{padding:"11px 10px",textAlign:"center",fontSize:15}} onClick={e=>e.stopPropagation()}>
+                        <span onClick={()=>openDetail(`${p.nombre} — Todas`,p.invoices)} style={{fontWeight:900,color:p.saldo>0?C.navy:C.muted,borderBottom:`1px dotted ${C.navy}`,cursor:"pointer"}}>{sym}{fmt(p.saldo)}</span>
+                      </td>
+                      <td style={{padding:"11px 10px",textAlign:"center",fontSize:15}} onClick={e=>e.stopPropagation()}>{p.corriente>0?<span style={{color:"#2E7D32",fontWeight:600,cursor:"pointer",borderBottom:"1px dotted #2E7D32"}} onClick={()=>openDetail(`${p.nombre} — Corriente`,fi(d=>d!==null&&d>=0))}>{sym}{fmt(p.corriente)}</span>:<span style={{color:C.muted}}>—</span>}</td>
+                      <td style={{padding:"11px 10px",textAlign:"center",fontSize:15}} onClick={e=>e.stopPropagation()}>{vCell(p.v7,sym,fi(d=>d!==null&&d<0&&Math.abs(d)<=7),`${p.nombre} — Venc 1-7d`,"#E65100")}</td>
+                      <td style={{padding:"11px 10px",textAlign:"center",fontSize:15}} onClick={e=>e.stopPropagation()}>{vCell(p.v15,sym,fi(d=>d!==null&&d<0&&Math.abs(d)>7&&Math.abs(d)<=15),`${p.nombre} — Venc 8-15d`,"#BF360C")}</td>
+                      <td style={{padding:"11px 10px",textAlign:"center",fontSize:15}} onClick={e=>e.stopPropagation()}>{vCell(p.v30,sym,fi(d=>d!==null&&d<0&&Math.abs(d)>15&&Math.abs(d)<=30),`${p.nombre} — Venc 16-30d`,"#C0392B")}</td>
+                      <td style={{padding:"11px 10px",textAlign:"center",fontSize:15}} onClick={e=>e.stopPropagation()}>{vCell(p.v60,sym,fi(d=>d!==null&&d<0&&Math.abs(d)>30&&Math.abs(d)<=60),`${p.nombre} — Venc 31-60d`,"#B71C1C")}</td>
+                      <td style={{padding:"11px 10px",textAlign:"center",fontSize:15}} onClick={e=>e.stopPropagation()}>{vCell(p.vmas,sym,fi(d=>d!==null&&d<0&&Math.abs(d)>60),`${p.nombre} — Venc +60d`,"#6A0000")}</td>
+                      <td style={{padding:"11px 10px",textAlign:"right"}} onClick={e=>e.stopPropagation()}>
+                        <button onClick={()=>openDetail(`${p.nombre} — Todas`,p.invoices)}
+                          style={{padding:"5px 12px",borderRadius:8,border:`1px solid ${C.blue}`,background:"#E8F0FE",color:C.blue,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"inherit",whiteSpace:"nowrap"}}>Ver →</button>
+                      </td>
                     </tr>
-                    {/* Proveedor rows */}
-                    {expanded && grupo.proveedores.map((p,i) => (
-                      <tr key={p.nombre} style={{borderTop:`1px solid ${C.border}`,background:i%2===0?"#FAFBFF":"#fff"}}
-                        onMouseEnter={e=>e.currentTarget.style.background="#E8F0FE"}
-                        onMouseLeave={e=>e.currentTarget.style.background=i%2===0?"#FAFBFF":"#fff"}>
-                        <td style={{padding:"10px 14px 10px 36px",color:C.text,fontWeight:600,fontSize:12}}>{p.nombre}</td>
-                        <td style={{padding:"10px 10px",textAlign:"right",color:C.muted,fontSize:11}}>{p.count}</td>
-                        <td style={{padding:"10px 10px",textAlign:"right",fontWeight:600}}>{sym}{fmt(p.total)}</td>
-                        <td style={{padding:"10px 10px",textAlign:"right",color:C.ok}}>{sym}{fmt(p.pagado)}</td>
-                        <td style={{padding:"10px 10px",textAlign:"right",fontWeight:800,color:p.saldo>0?C.navy:C.muted}}>{sym}{fmt(p.saldo)}</td>
-                        <td style={{padding:"10px 10px",textAlign:"right",color:C.ok,fontWeight:600}}>{p.corriente>0?sym+fmt(p.corriente):"—"}</td>
-                        <td style={{padding:"10px 10px",textAlign:"right"}}>{vCell(p.v7)}</td>
-                        <td style={{padding:"10px 10px",textAlign:"right"}}>{vCell(p.v15)}</td>
-                        <td style={{padding:"10px 10px",textAlign:"right"}}>{vCell(p.v30)}</td>
-                        <td style={{padding:"10px 10px",textAlign:"right"}}>{vCell(p.v60,true)}</td>
-                        <td style={{padding:"10px 10px",textAlign:"right"}}>{vCell(p.vmas,true)}</td>
-                        <td style={{padding:"10px 10px",textAlign:"right"}}>
-                          <button onClick={()=>onVerFacturas(p.nombre)}
-                            style={{padding:"4px 12px",borderRadius:8,border:`1px solid ${C.blue}`,background:"#E8F0FE",color:C.blue,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit",whiteSpace:"nowrap"}}>
-                            Ver →
-                          </button>
+                    {/* Accordion: facturas del proveedor */}
+                    {expanded && (
+                      <tr style={{background:"#F8FAFC"}}>
+                        <td colSpan={12} style={{padding:0}}>
+                          <div style={{overflowX:"auto",borderTop:`1px solid ${C.border}`}}>
+                            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                              <thead>
+                                <tr style={{background:"#EEF2FF"}}>
+                                  {["Fecha","Folio","Concepto","Clasif.","Vencimiento","Días","Total","Pagado","Saldo Total","Estatus"].map(h=>(
+                                    <th key={h} style={{padding:"7px 12px",textAlign:["Total","Pagado","Saldo Total"].includes(h)?"right":"left",color:C.navy,fontWeight:700,fontSize:11,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {p.invoices.filter(i=>i.estatus!=="Pagado").sort((a,b)=>(a.vencimiento||"").localeCompare(b.vencimiento||"")).map((inv,ii)=>{
+                                  const saldoInv=(+inv.total||0)-(+inv.montoPagado||0);
+                                  const dias=calcDias(inv.vencimiento);
+                                  return(
+                                    <tr key={inv.id} style={{borderTop:`1px solid ${C.border}`,background:ii%2===0?"#fff":"#F8FAFC"}}>
+                                      <td style={{padding:"7px 12px",fontSize:11,color:C.muted,whiteSpace:"nowrap"}}>{inv.fecha||"—"}</td>
+                                      <td style={{padding:"7px 12px",color:C.blue,fontWeight:600,whiteSpace:"nowrap"}}>{inv.serie}{inv.folio}</td>
+                                      <td style={{padding:"7px 12px",color:C.muted,maxWidth:150,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{inv.concepto||"—"}</td>
+                                      <td style={{padding:"7px 12px"}}><span style={{background:"#EEF2FF",color:C.blue,padding:"2px 6px",borderRadius:20,fontSize:10,fontWeight:700}}>{inv.clasificacion}</span></td>
+                                      <td style={{padding:"7px 12px",fontSize:11,whiteSpace:"nowrap",color:dias!==null&&dias<0?C.danger:C.text}}>{inv.vencimiento||"—"}</td>
+                                      <td style={{padding:"7px 12px",textAlign:"center"}}>
+                                        {dias===null?<span style={{color:C.muted}}>—</span>:dias<0?
+                                          <span style={{background:"#FFEBEE",color:C.danger,fontWeight:800,fontSize:10,padding:"2px 6px",borderRadius:20}}>{Math.abs(dias)}d venc.</span>:
+                                          <span style={{background:"#E8F5E9",color:C.ok,fontWeight:700,fontSize:10,padding:"2px 6px",borderRadius:20}}>{dias}d</span>}
+                                      </td>
+                                      <td style={{padding:"7px 12px",textAlign:"right",fontWeight:600}}>{sym}{fmt(+inv.total||0)}</td>
+                                      <td style={{padding:"7px 12px",textAlign:"right",color:C.ok}}>{sym}{fmt(+inv.montoPagado||0)}</td>
+                                      <td style={{padding:"7px 12px",textAlign:"right",fontWeight:800,color:saldoInv>0?C.danger:C.ok}}>{sym}{fmt(saldoInv)}</td>
+                                      <td style={{padding:"7px 12px"}}><span style={{background:`${statusColor(inv.estatus)}22`,color:statusColor(inv.estatus),border:`1px solid ${statusColor(inv.estatus)}`,padding:"2px 7px",borderRadius:20,fontSize:10,fontWeight:700}}>{inv.estatus}</span></td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
                         </td>
                       </tr>
-                    ))}
-                  </React.Fragment>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-        {displayed.length === 0 && (
-          <div style={{textAlign:"center",padding:40,color:C.muted}}>
-            <div style={{fontSize:36,marginBottom:8}}>📊</div>
-            <div>No hay datos para mostrar</div>
+                    )}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
-        )}
+        </div>
       </div>
+    );
+  };
+
+  return(
+    <div>
+      <DetailModal/>
+      <GrupoPicker/>
+
+      {/* Export buttons only — now wired from outside */}
+      <div style={{display:"none"}}></div>
+
+      {/* ── VISTA GRUPO SELECCIONADO ── */}
+      {filtroGrupo && grupoData && (
+        <div>
+          <div style={{fontWeight:800,fontSize:16,color:C.navy,marginBottom:16,display:"flex",alignItems:"center",gap:8}}>
+            🏨 {filtroGrupo}
+            <span style={{fontSize:13,color:C.muted,fontWeight:400}}>— deuda consolidada por moneda</span>
+          </div>
+          {currencies.map(mon=>{
+            const v=grupoData[mon];
+            if(!v||!v.proveedores.length) return null;
+            return <ProvTable key={mon} mon={mon} provs={v.proveedores}/>;
+          })}
+        </div>
+      )}
+
+      {/* ── VISTA TODOS LOS PROVEEDORES ── */}
+      {!filtroGrupo && (
+        <div>
+          {currencies.map(mon=>{
+            const provs=provFlat.map(p=>p.byMon[mon]).filter(Boolean);
+            if(!provs.length) return null;
+            return <ProvTable key={mon} mon={mon} provs={provs}/>;
+          })}
+        </div>
+      )}
     </div>
+  );
+}
+
+/* ── ProveedorPicker component ───────────────────────────────────────── */
+function ProveedorPicker({ curInvoices, filtroProveedores, setFiltroProveedores, inputStyle, C }) {
+  const [open, setOpen] = useState(false);
+  const [localSearch, setLocalSearch] = useState("");
+  const [localSel, setLocalSel] = useState(new Set());
+
+  const provList = useMemo(() =>
+    [...new Set(curInvoices.map(i=>i.proveedor))].sort(),
+  [curInvoices]);
+
+  const filtered = localSearch
+    ? provList.filter(p=>p.toLowerCase().includes(localSearch.toLowerCase()))
+    : provList;
+
+  const handleOpen = () => {
+    setLocalSel(new Set(filtroProveedores));
+    setLocalSearch("");
+    setOpen(true);
+  };
+
+  const handleApply = () => {
+    setFiltroProveedores(new Set(localSel));
+    setOpen(false);
+  };
+
+  const handleClear = () => {
+    setLocalSel(new Set());
+    setFiltroProveedores(new Set());
+    setOpen(false);
+  };
+
+  const toggleAll = () => {
+    if(localSel.size === filtered.length) setLocalSel(new Set());
+    else setLocalSel(new Set(filtered));
+  };
+
+  const toggle = (p) => {
+    const n = new Set(localSel);
+    n.has(p) ? n.delete(p) : n.add(p);
+    setLocalSel(n);
+  };
+
+  const label = filtroProveedores.size === 0
+    ? "Todos los proveedores"
+    : filtroProveedores.size === 1
+      ? [...filtroProveedores][0]
+      : `${filtroProveedores.size} proveedores seleccionados`;
+
+  return (
+    <>
+      <button onClick={handleOpen} style={{
+        ...inputStyle, display:"flex", alignItems:"center", gap:6, cursor:"pointer",
+        background: filtroProveedores.size>0 ? "#E8F0FE" : "#fff",
+        borderColor: filtroProveedores.size>0 ? C.blue : C.border,
+        color: filtroProveedores.size>0 ? C.blue : C.muted,
+        fontWeight: filtroProveedores.size>0 ? 700 : 400,
+        minWidth: 200, maxWidth: 240, justifyContent:"space-between",
+      }}>
+        <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontSize:13}}>{label}</span>
+        <span style={{fontSize:10,flexShrink:0}}>▼</span>
+      </button>
+
+      {open && (
+        <div style={{position:"fixed",inset:0,zIndex:500,background:"rgba(0,0,0,.35)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
+          onClick={()=>setOpen(false)}>
+          <div style={{background:"#fff",borderRadius:16,width:"100%",maxWidth:440,maxHeight:"75vh",display:"flex",flexDirection:"column",boxShadow:"0 24px 64px rgba(0,0,0,.25)"}}
+            onClick={e=>e.stopPropagation()}>
+            {/* Header */}
+            <div style={{padding:"16px 20px",background:C.navy,borderRadius:"16px 16px 0 0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{fontWeight:800,color:"#fff",fontSize:15}}>🏢 Seleccionar Proveedores</span>
+              <button onClick={()=>setOpen(false)} style={{background:"rgba(255,255,255,.15)",border:"none",borderRadius:6,color:"#fff",width:28,height:28,cursor:"pointer",fontSize:16}}>×</button>
+            </div>
+            {/* Search */}
+            <div style={{padding:"12px 16px",borderBottom:`1px solid ${C.border}`}}>
+              <input autoFocus placeholder="🔍 Buscar proveedor…" value={localSearch}
+                onChange={e=>setLocalSearch(e.target.value)}
+                style={{padding:"8px 12px",borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,width:"100%",boxSizing:"border-box",fontFamily:"inherit"}}/>
+            </div>
+            {/* Select all */}
+            <div style={{padding:"10px 16px",borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:10,cursor:"pointer",background:"#F8FAFC"}}
+              onClick={toggleAll}>
+              <input type="checkbox" checked={localSel.size===filtered.length&&filtered.length>0} onChange={toggleAll}
+                style={{cursor:"pointer",accentColor:C.blue,width:15,height:15}} onClick={e=>e.stopPropagation()}/>
+              <span style={{fontSize:13,fontWeight:600,color:C.navy}}>
+                {localSel.size===filtered.length&&filtered.length>0 ? "Deseleccionar todos" : "Seleccionar todos"}
+              </span>
+              <span style={{fontSize:12,color:C.muted,marginLeft:"auto"}}>{filtered.length} proveedores</span>
+            </div>
+            {/* List */}
+            <div style={{overflowY:"auto",flex:1}}>
+              {filtered.map(p=>(
+                <div key={p} onClick={()=>toggle(p)}
+                  style={{padding:"10px 16px",display:"flex",alignItems:"center",gap:10,cursor:"pointer",
+                    background:localSel.has(p)?"#E8F0FE":"#fff",borderBottom:`1px solid ${C.border}`}}
+                  onMouseEnter={e=>{if(!localSel.has(p))e.currentTarget.style.background="#F0F4FF";}}
+                  onMouseLeave={e=>{e.currentTarget.style.background=localSel.has(p)?"#E8F0FE":"#fff";}}>
+                  <input type="checkbox" checked={localSel.has(p)} readOnly
+                    style={{cursor:"pointer",accentColor:C.blue,width:15,height:15}}/>
+                  <span style={{fontSize:13,color:localSel.has(p)?C.blue:C.text,fontWeight:localSel.has(p)?600:400}}>{p}</span>
+                </div>
+              ))}
+              {filtered.length===0 && (
+                <div style={{padding:24,textAlign:"center",color:C.muted,fontSize:13}}>Sin resultados</div>
+              )}
+            </div>
+            {/* Footer */}
+            <div style={{padding:"12px 16px",borderTop:`1px solid ${C.border}`,display:"flex",gap:8,justifyContent:"space-between",alignItems:"center",background:"#F8FAFC"}}>
+              <span style={{fontSize:12,color:C.muted}}>{localSel.size} seleccionados</span>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={handleClear}
+                  style={{padding:"8px 16px",borderRadius:8,border:`1px solid ${C.border}`,background:"#F1F5F9",color:C.text,cursor:"pointer",fontSize:13,fontFamily:"inherit"}}>
+                  Limpiar
+                </button>
+                <button onClick={handleApply}
+                  style={{padding:"8px 20px",borderRadius:8,border:"none",background:C.blue,color:"#fff",cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"inherit"}}>
+                  Aplicar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
