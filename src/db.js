@@ -876,23 +876,39 @@ export async function fetchBromeliaData(empresaId, onProgress) {
   return all.map(bromeliaToApp);
 }
 
-// UPSERT por lotes — rápido para 20K+ registros
+// UPSERT por lotes — deduplicado + manejo de errores robusto
 export async function upsertBromeliaData(rows, empresaId, uploadedBy, onProgress) {
-  if (!rows.length) return { inserted: 0, errors: 0 };
-  const records = rows.map(r => bromelia_toDB(r, empresaId, uploadedBy));
-  let inserted = 0, errors = 0;
-  const totalBatches = Math.ceil(records.length / BROMELIA_BATCH);
-  for (let i = 0; i < records.length; i += BROMELIA_BATCH) {
-    const batch = records.slice(i, i + BROMELIA_BATCH);
-    const batchNum = Math.floor(i / BROMELIA_BATCH) + 1;
+  if (!rows.length) return { inserted: 0, errors: 0, errorMsg: '' };
+  const allRecords = rows.map(r => bromelia_toDB(r, empresaId, uploadedBy));
+
+  // ── DEDUPLICAR por dedup_key (PostgreSQL no permite duplicados en un mismo batch) ──
+  const dedupMap = new Map();
+  for (const rec of allRecords) {
+    dedupMap.set(rec.dedup_key, rec); // último gana si hay duplicados
+  }
+  const records = [...dedupMap.values()];
+  const dupes = allRecords.length - records.length;
+
+  let inserted = 0, errors = 0, lastError = '';
+  const batchSize = 200; // lotes más pequeños = más confiable
+  const totalBatches = Math.ceil(records.length / batchSize);
+
+  for (let i = 0; i < records.length; i += batchSize) {
+    const batch = records.slice(i, i + batchSize);
+    const batchNum = Math.floor(i / batchSize) + 1;
     const { error } = await supabase
       .from('bromelia_operaciones')
       .upsert(batch, { onConflict: 'empresa_id,dedup_key', ignoreDuplicates: false });
-    if (!error) { inserted += batch.length; }
-    else { console.error('upsertBromelia batch error:', error); errors += batch.length; }
-    if (onProgress) onProgress({ batchNum, totalBatches, inserted, errors });
+    if (!error) {
+      inserted += batch.length;
+    } else {
+      console.error(`upsertBromelia lote ${batchNum} error:`, error);
+      lastError = error.message || error.code || JSON.stringify(error);
+      errors += batch.length;
+    }
+    if (onProgress) onProgress({ batchNum, totalBatches, inserted, errors, dupes });
   }
-  return { inserted, errors };
+  return { inserted, errors, dupes, errorMsg: lastError };
 }
 
 export async function deleteBromeliaData(empresaId) {

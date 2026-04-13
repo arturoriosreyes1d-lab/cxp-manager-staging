@@ -2933,19 +2933,28 @@ export default function BromeliaView({ empresaId, user }) {
     try {
       const result = await upsertBromeliaData(
         preview.rows, empresaId, user?.username || user?.nombre || null,
-        ({ batchNum, totalBatches, inserted }) => {
-          setSavingMsg(`Lote ${batchNum}/${totalBatches} · ${inserted.toLocaleString()} guardados`);
+        ({ batchNum, totalBatches, inserted, errors }) => {
+          setSavingMsg(`Lote ${batchNum}/${totalBatches} · ${inserted.toLocaleString()} guardados${errors > 0 ? ` · ${errors} errores` : ''}`);
         }
       );
-      setSavingMsg("Recargando datos…");
-      const fresh = await fetchBromeliaData(empresaId);
-      setData(fresh);
-      setFileName(`Supabase · ${fresh.length.toLocaleString()} registros`);
-      setPreview(null);
-      setUploadMsg({ type: "ok", text: `✅ Importación exitosa: ${result.inserted.toLocaleString()} registros guardados` });
-      setTimeout(() => setUploadMsg(null), 6000);
+      if (result.errors > 0 && result.inserted === 0) {
+        // Todo falló — mostrar error real
+        setUploadMsg({ type: "error", text: `❌ Error al guardar: ${result.errorMsg || 'Error desconocido'}. Revisa la consola (F12) para más detalles.` });
+        setPreview(null);
+      } else {
+        setSavingMsg("Recargando datos…");
+        const fresh = await fetchBromeliaData(empresaId);
+        setData(fresh);
+        setFileName(`Supabase · ${fresh.length.toLocaleString()} registros`);
+        setPreview(null);
+        const parts = [`${result.inserted.toLocaleString()} registros guardados`];
+        if (result.dupes > 0) parts.push(`${result.dupes} duplicados dentro del Excel omitidos`);
+        if (result.errors > 0) parts.push(`${result.errors} errores`);
+        setUploadMsg({ type: result.errors > 0 ? "warn" : "ok", text: `✅ Importación: ${parts.join(' · ')}` });
+      }
+      setTimeout(() => setUploadMsg(null), 10000);
     } catch (e) {
-      setError("Error guardando datos: " + e);
+      setUploadMsg({ type: "error", text: `❌ Error: ${e.message || e}` });
     } finally {
       setSaving(false);
       setSavingMsg("");
