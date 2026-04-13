@@ -769,8 +769,8 @@ export async function bulkInsertMovimientos(rows) {
 
 /* ── Bromelia Operaciones ─────────────────────────────────────── */
 
-const BROMELIA_PAGE = 3000;  // rows per fetch page (reduce round-trips)
-const BROMELIA_BATCH = 800;  // rows per upsert call
+const BROMELIA_PAGE = 1000;  // Supabase PostgREST max = 1000, NO subir
+const BROMELIA_BATCH = 800;  // rows per upsert call (no afectado por PostgREST)
 
 // Columnas que ya están indexadas en la tabla — se excluyen de raw_data para ahorrar espacio
 const INDEXED_RAW_KEYS = new Set([
