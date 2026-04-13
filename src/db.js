@@ -876,21 +876,31 @@ export async function fetchBromeliaData(empresaId, onProgress) {
   return all.map(bromeliaToApp);
 }
 
-// UPSERT por lotes — deduplicado + manejo de errores robusto
+// REEMPLAZAR DATOS: DELETE todo + INSERT por lotes (el Excel siempre trae datos completos)
 export async function upsertBromeliaData(rows, empresaId, uploadedBy, onProgress) {
   if (!rows.length) return { inserted: 0, errors: 0, errorMsg: '' };
-  const allRecords = rows.map(r => bromelia_toDB(r, empresaId, uploadedBy));
 
-  // ── DEDUPLICAR por dedup_key (PostgreSQL no permite duplicados en un mismo batch) ──
-  const dedupMap = new Map();
-  for (const rec of allRecords) {
-    dedupMap.set(rec.dedup_key, rec); // último gana si hay duplicados
+  // ── PASO 1: Borrar datos anteriores de esta empresa ──
+  if (onProgress) onProgress({ batchNum: 0, totalBatches: 0, inserted: 0, errors: 0, phase: 'Borrando datos anteriores…' });
+  const { error: delError } = await supabase
+    .from('bromelia_operaciones')
+    .delete()
+    .eq('empresa_id', empresaId);
+  if (delError) {
+    console.error('deleteBromelia error:', delError);
+    return { inserted: 0, errors: rows.length, errorMsg: 'Error borrando datos anteriores: ' + (delError.message || '') };
   }
-  const records = [...dedupMap.values()];
-  const dupes = allRecords.length - records.length;
 
+  // ── PASO 2: Preparar records con row_index como dedup_key único ──
+  const records = rows.map((r, idx) => {
+    const rec = bromelia_toDB(r, empresaId, uploadedBy);
+    rec.dedup_key = `row_${idx}`; // cada fila del Excel es única por posición
+    return rec;
+  });
+
+  // ── PASO 3: Insertar por lotes ──
   let inserted = 0, errors = 0, lastError = '';
-  const batchSize = 200; // lotes más pequeños = más confiable
+  const batchSize = 200;
   const totalBatches = Math.ceil(records.length / batchSize);
 
   for (let i = 0; i < records.length; i += batchSize) {
@@ -898,17 +908,17 @@ export async function upsertBromeliaData(rows, empresaId, uploadedBy, onProgress
     const batchNum = Math.floor(i / batchSize) + 1;
     const { error } = await supabase
       .from('bromelia_operaciones')
-      .upsert(batch, { onConflict: 'empresa_id,dedup_key', ignoreDuplicates: false });
+      .insert(batch);
     if (!error) {
       inserted += batch.length;
     } else {
-      console.error(`upsertBromelia lote ${batchNum} error:`, error);
+      console.error(`insertBromelia lote ${batchNum} error:`, error);
       lastError = error.message || error.code || JSON.stringify(error);
       errors += batch.length;
     }
-    if (onProgress) onProgress({ batchNum, totalBatches, inserted, errors, dupes });
+    if (onProgress) onProgress({ batchNum, totalBatches, inserted, errors, phase: `Lote ${batchNum}/${totalBatches}` });
   }
-  return { inserted, errors, dupes, errorMsg: lastError };
+  return { inserted, errors, errorMsg: lastError };
 }
 
 export async function deleteBromeliaData(empresaId) {

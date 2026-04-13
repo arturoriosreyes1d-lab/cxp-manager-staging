@@ -2811,7 +2811,7 @@ function UploadPreviewModal({ preview, existingCount, onConfirm, onCancel, savin
         <div style={{ padding: "20px 28px" }}>
           {existingCount > 0 && (
             <div style={{ background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: 10, padding: "10px 14px", marginBottom: 16, fontSize: 13, color: "#1e40af" }}>
-              ℹ️ Ya tienes <b>{existingCount}</b> registros en la base. Los nuevos se acumularán (duplicados se actualizan automáticamente).
+              ⚠️ Ya tienes <b>{existingCount}</b> registros en la base. Se reemplazarán con los {rows.length.toLocaleString()} del nuevo Excel.
             </div>
           )}
 
@@ -2933,8 +2933,8 @@ export default function BromeliaView({ empresaId, user }) {
     try {
       const result = await upsertBromeliaData(
         preview.rows, empresaId, user?.username || user?.nombre || null,
-        ({ batchNum, totalBatches, inserted, errors }) => {
-          setSavingMsg(`Lote ${batchNum}/${totalBatches} · ${inserted.toLocaleString()} guardados${errors > 0 ? ` · ${errors} errores` : ''}`);
+        ({ batchNum, totalBatches, inserted, errors, phase }) => {
+          setSavingMsg(phase ? `${phase} · ${inserted.toLocaleString()} guardados${errors > 0 ? ` · ${errors} errores` : ''}` : 'Preparando…');
         }
       );
       if (result.errors > 0 && result.inserted === 0) {
@@ -2948,9 +2948,8 @@ export default function BromeliaView({ empresaId, user }) {
         setFileName(`Supabase · ${fresh.length.toLocaleString()} registros`);
         setPreview(null);
         const parts = [`${result.inserted.toLocaleString()} registros guardados`];
-        if (result.dupes > 0) parts.push(`${result.dupes} duplicados dentro del Excel omitidos`);
         if (result.errors > 0) parts.push(`${result.errors} errores`);
-        setUploadMsg({ type: result.errors > 0 ? "warn" : "ok", text: `✅ Importación: ${parts.join(' · ')}` });
+        setUploadMsg({ type: result.errors > 0 ? "warn" : "ok", text: `✅ ${parts.join(' · ')}` });
       }
       setTimeout(() => setUploadMsg(null), 10000);
     } catch (e) {
