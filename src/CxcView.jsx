@@ -1578,22 +1578,6 @@ export default function CxcView({
         </>}
         <td style={{padding:"10px 8px",whiteSpace:"nowrap"}} onClick={e=>e.stopPropagation()}>
           <button onClick={()=>setDetailIngreso(ing.id)} style={{...iconBtn,color:C.sky}} title="Ver detalle">🔍</button>
-          {!esConsulta && (() => {
-            const fechaEfeDefault = ing.fechaFicticia || ing.fechaVencimiento || ing.fecha || '';
-            const proyectar = async () => {
-              const fe = ing.enEfe ? '' : fechaEfeDefault;
-              await updateIngresoField(ing.id, { enEfe: !ing.enEfe, fechaEfe: fe });
-              setIngresos(prev => prev.map(i => i.id===ing.id ? {...i, enEfe:!ing.enEfe, fechaEfe:fe} : i));
-            };
-            return (
-              <button onClick={e=>{e.stopPropagation(); proyectar();}}
-                style={{...iconBtn, color: ing.enEfe?'#1565C0':C.muted, fontSize:16,
-                  background: ing.enEfe?'#EFF6FF':'none', borderRadius: ing.enEfe?6:0}}
-                title={ing.enEfe?`✅ En EFE: ${ing.fechaEfe||'sin fecha'} — clic para quitar`:'Proyectar en EFE'}>
-                🌊
-              </button>
-            );
-          })()}
           {!esConsulta && <button onClick={()=>setModalIngreso({...ing})} style={{...iconBtn,color:C.blue}} title="Editar">✏️</button>}
           {!esConsulta && <button onClick={()=>setDeleteConfirm({id:ing.id,label:`${ing.cliente} — ${ing.folio||ing.concepto||ing.segmento}`})} style={{...iconBtn,color:C.danger}} title="Eliminar">🗑️</button>}
         </td>

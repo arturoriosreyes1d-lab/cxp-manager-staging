@@ -18,7 +18,7 @@ import {
   fetchTarjetas, updateTarjetaSaldo, fetchTarjetaMovimientos, bulkInsertMovimientos,
 } from "./db.js";
 import CxcView from "./CxcView.jsx";
-import EfeView from "./EfeView.jsx";
+import BromeliaView from "./BromeliaView.jsx";
 import { EMPRESAS } from "./empresas.js";
 
 /* ── Palette ─────────────────────────────────────────────────────────────── */
@@ -151,7 +151,6 @@ export default function CxpApp({ user, onLogout }) {
   const [grupoPor, setGrupoPor] = useState("proveedor");
   const [grupo2, setGrupo2] = useState(""); // secondary grouping
   const [modalInv, setModalInv] = useState(null);
-  const [efeModal, setEfeModal] = useState(null); // factura a proyectar en EFE
   const [modalSup, setModalSup] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null); // {id, cur}
   const [importMsg, setImportMsg] = useState("");
@@ -198,9 +197,11 @@ export default function CxpApp({ user, onLogout }) {
   const [financiamientos, setFinanciamientos] = useState([]);
   const [financiamientoPagos, setFinanciamientoPagos] = useState([]);
   const [financModalId, setFinancModalId] = useState(null);
-  const [financImportPreview, setFinancImportPreview] = useState(null); // [{nombre,concepto,montoMensual,fechaInicio,fechaFin,diaPago,plazos}]
-  const [financImportando, setFinancImportando] = useState(false); // which credit is open
+  const [financCollapsed, setFinancCollapsed] = useState(false);
+  const [financImportPreview, setFinancImportPreview] = useState(null);
+  const [financImportando, setFinancImportando] = useState(false);
   const [tarjetas, setTarjetas] = useState([]);
+  const [tarjetasCollapsed, setTarjetasCollapsed] = useState(false);
   const [tarjetaMovimientos, setTarjetaMovimientos] = useState([]);
   const [tarjetaModalId, setTarjetaModalId] = useState(null);
   const [tarjetaImportPreview, setTarjetaImportPreview] = useState(null);
@@ -556,29 +557,6 @@ export default function CxpApp({ user, onLogout }) {
     deleteInvoiceDB(id);
   };
 
-  /* ── EFE: proyectar / quitar facturas ───────────────────────── */
-  const proyectarInvEfe = async (inv, fechaEfe) => {
-    const fe = fechaEfe || inv.fechaProgramacion || '';
-    await updateInvoiceField(inv.id, { enEfe: true, fechaEfe: fe });
-    const upd = i => i.id === inv.id ? { ...i, enEfe: true, fechaEfe: fe } : i;
-    setInvoices(prev => ({ MXN: prev.MXN.map(upd), USD: prev.USD.map(upd), EUR: prev.EUR.map(upd) }));
-    setEfeModal(null);
-  };
-  const quitarInvEfe = async (id) => {
-    await updateInvoiceField(id, { enEfe: false, fechaEfe: '' });
-    const upd = i => i.id === id ? { ...i, enEfe: false, fechaEfe: '' } : i;
-    setInvoices(prev => ({ MXN: prev.MXN.map(upd), USD: prev.USD.map(upd), EUR: prev.EUR.map(upd) }));
-  };
-  const proyectarIngEfe = async (ing, fechaEfe) => {
-    const fe = fechaEfe || ing.fechaFicticia || ing.fechaVencimiento || ing.fecha || '';
-    await updateIngresoField(ing.id, { enEfe: true, fechaEfe: fe });
-    setIngresos(prev => prev.map(i => i.id === ing.id ? { ...i, enEfe: true, fechaEfe: fe } : i));
-  };
-  const quitarIngEfe = async (id) => {
-    await updateIngresoField(id, { enEfe: false, fechaEfe: '' });
-    setIngresos(prev => prev.map(i => i.id === id ? { ...i, enEfe: false, fechaEfe: '' } : i));
-  };
-
   const updateEstatus = (id, estatus) => {
     let mp;
     setInvoices(prev => ({ ...prev, [currency]: prev[currency].map(i => {
@@ -912,15 +890,6 @@ export default function CxpApp({ user, onLogout }) {
         <td style={{padding:"10px 8px",whiteSpace:"nowrap"}}>
           {!esConsulta && <button onClick={e=>{e.stopPropagation();setPayModal({invoiceId:inv.id,proveedor:inv.proveedor,folio:`${inv.serie}${inv.folio}`,total:inv.total,moneda:inv.moneda||currency});}} style={{...iconBtn,color:C.ok}} title="Pagos">💰</button>}
           {!esConsulta && <button onClick={e=>{e.stopPropagation();setVincularModal({invoiceId:inv.id,proveedor:inv.proveedor,folio:`${inv.serie}${inv.folio}`,total:inv.total,moneda:inv.moneda||currency});}} style={{...iconBtn,color:C.teal}} title="Vincular a Ingreso CxC">🔗</button>}
-          {!esConsulta && (
-            <button
-              onClick={e=>{e.stopPropagation(); inv.enEfe ? quitarInvEfe(inv.id) : setEfeModal(inv);}}
-              style={{...iconBtn, color: inv.enEfe ? '#1565C0' : C.muted, fontSize:16,
-                background: inv.enEfe ? '#EFF6FF' : 'none', borderRadius: inv.enEfe ? 6 : 0}}
-              title={inv.enEfe ? `✅ En EFE: ${inv.fechaEfe||'sin fecha'} — clic para quitar` : "Proyectar en EFE"}>
-              🌊
-            </button>
-          )}
           <button onClick={()=>setModalInv({...inv,moneda:inv.moneda||currency})} style={{...iconBtn,color:C.sky}} title="Editar" hidden={esConsulta}>✏️</button>
           <button onClick={()=>setDeleteConfirm({id:inv.id,cur:currency,label:`${inv.serie}${inv.folio} - ${inv.proveedor}`})} style={{...iconBtn,color:C.danger}} title="Eliminar">🗑️</button>
         </td>
@@ -1368,21 +1337,24 @@ export default function CxpApp({ user, onLogout }) {
             <div style={{display:"flex",gap:12,marginBottom:16,flexWrap:"wrap"}}>
               {/* Financiamientos */}
               <div style={{background:"#0F2D4A",borderRadius:12,overflow:"hidden",flex:"3 1 0",minWidth:0}}>
-                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 14px"}}>
+                <div onClick={()=>setFinancCollapsed(c=>!c)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 14px",cursor:"pointer",userSelect:"none"}}>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>
                     <span style={{fontSize:15}}>🏦</span>
                     <span style={{fontWeight:800,fontSize:12,color:"#fff",textTransform:"uppercase",letterSpacing:.5}}>Financiamientos</span>
                     {activos.length>0&&<span style={{background:"rgba(255,255,255,.15)",color:"rgba(255,255,255,.9)",fontSize:10,fontWeight:700,padding:"1px 7px",borderRadius:20}}>{activos.length} activo{activos.length!==1?"s":""}</span>}
                   </div>
                   <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                    {activos.length===0&&<span style={{fontSize:11,color:"rgba(255,255,255,.4)"}}>Sin registros</span>}
-                    <button onClick={()=>financImportRef.current?.click()}
-                      style={{padding:"4px 10px",borderRadius:7,border:"1px solid rgba(255,255,255,.25)",background:"rgba(255,255,255,.1)",color:"#fff",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit"}}>
-                      📥 Importar
-                    </button>
+                    <div style={{display:"flex",gap:6,alignItems:"center"}} onClick={e=>e.stopPropagation()}>
+                      {activos.length===0&&<span style={{fontSize:11,color:"rgba(255,255,255,.4)"}}>Sin registros</span>}
+                      <button onClick={()=>financImportRef.current?.click()}
+                        style={{padding:"4px 10px",borderRadius:7,border:"1px solid rgba(255,255,255,.25)",background:"rgba(255,255,255,.1)",color:"#fff",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit"}}>
+                        📥 Importar
+                      </button>
+                    </div>
+                    <span style={{color:"rgba(255,255,255,.6)",fontSize:16,marginLeft:4,transition:"transform .2s",display:"inline-block",transform:financCollapsed?"rotate(-90deg)":"rotate(0deg)"}}>▼</span>
                   </div>
                 </div>
-                {activos.length>0&&(
+                {!financCollapsed && activos.length>0&&(
                   <div style={{display:"flex",gap:8,padding:"8px 10px 12px",background:"#F0F4FF"}}>
                     {activos.map(f=><ChipFinanc key={f.id} f={f}/>)}
                   </div>
@@ -1390,20 +1362,23 @@ export default function CxpApp({ user, onLogout }) {
               </div>
               {/* Tarjetas de Crédito */}
               <div style={{background:"#1A0533",borderRadius:12,overflow:"hidden",flex:"1 1 0",minWidth:220}}>
-                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 14px"}}>
+                <div onClick={()=>setTarjetasCollapsed(c=>!c)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 14px",cursor:"pointer",userSelect:"none"}}>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>
                     <span style={{fontSize:15}}>💳</span>
                     <span style={{fontWeight:800,fontSize:12,color:"#fff",textTransform:"uppercase",letterSpacing:.5}}>Tarjetas de Crédito</span>
                     {tarjetas.filter(t=>t.activo).length>0&&<span style={{background:"rgba(255,255,255,.15)",color:"rgba(255,255,255,.9)",fontSize:10,fontWeight:700,padding:"1px 7px",borderRadius:20}}>{tarjetas.filter(t=>t.activo).length}</span>}
                   </div>
                   <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                    <button onClick={()=>tarjetaImportRef.current?.click()}
-                      style={{padding:"4px 10px",borderRadius:7,border:"1px solid rgba(255,255,255,.25)",background:"rgba(255,255,255,.1)",color:"#fff",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit"}}>
-                      📥 Importar CSV
-                    </button>
+                    <div style={{display:"flex",gap:6,alignItems:"center"}} onClick={e=>e.stopPropagation()}>
+                      <button onClick={()=>tarjetaImportRef.current?.click()}
+                        style={{padding:"4px 10px",borderRadius:7,border:"1px solid rgba(255,255,255,.25)",background:"rgba(255,255,255,.1)",color:"#fff",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit"}}>
+                        📥 Importar CSV
+                      </button>
+                    </div>
+                    <span style={{color:"rgba(255,255,255,.6)",fontSize:16,marginLeft:4,transition:"transform .2s",display:"inline-block",transform:tarjetasCollapsed?"rotate(-90deg)":"rotate(0deg)"}}>▼</span>
                   </div>
                 </div>
-                {tarjetas.filter(t=>t.activo).length>0 ? (
+                {!tarjetasCollapsed && (tarjetas.filter(t=>t.activo).length>0 ? (
                   <div style={{display:"flex",gap:8,padding:"8px 10px 12px",background:"#F5F0FF",flexWrap:"wrap"}}>
                     {tarjetas.filter(t=>t.activo).map(t=>{
                       const pct = t.limite>0 ? Math.round((t.saldoActual/t.limite)*100) : 0;
@@ -1461,7 +1436,7 @@ export default function CxpApp({ user, onLogout }) {
                   <div style={{padding:"12px 14px",background:"#F5F0FF",display:"flex",alignItems:"center",justifyContent:"center",minHeight:80}}>
                     <span style={{fontSize:12,color:"#9C27B0",fontWeight:600,opacity:.7}}>Importa un CSV de Konfio para comenzar</span>
                   </div>
-                )}
+                ))}
               </div>
             </div>
           );
@@ -2846,7 +2821,7 @@ export default function CxpApp({ user, onLogout }) {
         <NavItem id="proveedores" icon="🏢" label="Proveedores"/>
         <NavItem id="proyeccion" icon="📅" label="Proyección"/>
         <NavItem id="importar" icon="📥" label="Importar"/>
-        <NavItem id="efe" icon="🌊" label="Flujo EFE"/>
+        {empresaId === "empresa_2" && <NavItem id="bromelia" icon="🌸" label="Bromelia"/>}
         <NavItem id="cxc" icon="💵" label="CxC — Ingresos"/>
         <NavItem id="clientes" icon="👥" label="Clientes CxC"/>
         <NavItem id="config" icon="⚙️" label="Configuración"/>
@@ -2892,20 +2867,10 @@ export default function CxpApp({ user, onLogout }) {
         {view==="proveedores" && renderProveedores()}
         {view==="proyeccion" && renderProyeccion()}
         {view==="importar" && renderImportar()}
-        {view==="config" && renderConfig()}
-        {view==="efe" && (
-          <EfeView
-            invoices={invoices}
-            ingresos={ingresos}
-            cobros={cobros}
-            empresaId={empresaId}
-            esConsulta={esConsulta}
-            onProjectInvoice={proyectarInvEfe}
-            onUnprojectInvoice={quitarInvEfe}
-            onProjectIngreso={proyectarIngEfe}
-            onUnprojectIngreso={quitarIngEfe}
-          />
+        {view==="bromelia" && empresaId === "empresa_2" && (
+          <BromeliaView empresaId={empresaId} user={user} />
         )}
+        {view==="config" && renderConfig()}
         {view==="cxc" && (
           <CxcView
             invoices={invoices}
@@ -2939,16 +2904,6 @@ export default function CxpApp({ user, onLogout }) {
           />
         )}
       </main>
-
-      {/* Modal: Proyectar factura en EFE */}
-      {efeModal && (
-        <ProyectarEfeModal
-          inv={efeModal}
-          onSave={proyectarInvEfe}
-          onClose={()=>setEfeModal(null)}
-          C={C} inputStyle={inputStyle}
-        />
-      )}
 
       {/* Modals */}
       {modalInv && <InvoiceModal/>}
@@ -4579,84 +4534,5 @@ function ProveedorPicker({ curInvoices, filtroProveedores, setFiltroProveedores,
         </div>
       )}
     </>
-  );
-}
-
-/* ═══════════════════════════════════════════════════════════════════
-   ProyectarEfeModal — mini modal para autorizar factura en EFE
-   ═══════════════════════════════════════════════════════════════════ */
-function ProyectarEfeModal({ inv, onSave, onClose, C, inputStyle }) {
-  const [fecha, setFecha] = React.useState(inv.fechaProgramacion || inv.vencimiento || '');
-  const saldo = (+inv.total||0) - (+inv.montoPagado||0);
-  const sym = inv.moneda==='EUR' ? '€' : '$';
-  const fmt = n => new Intl.NumberFormat('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2}).format(+n);
-
-  return (
-    <div style={{position:'fixed',inset:0,background:'rgba(15,45,74,.45)',display:'flex',
-      alignItems:'center',justifyContent:'center',zIndex:1200,padding:20}} onClick={onClose}>
-      <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:18,padding:28,
-        maxWidth:420,width:'100%',boxShadow:'0 20px 60px rgba(0,0,0,.25)'}}>
-
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18}}>
-          <div style={{display:'flex',alignItems:'center',gap:10}}>
-            <span style={{fontSize:24}}>🌊</span>
-            <h2 style={{fontSize:17,fontWeight:800,color:C.navy,margin:0}}>Proyectar en EFE</h2>
-          </div>
-          <button onClick={onClose} style={{background:'#F1F5F9',border:'none',borderRadius:8,
-            width:32,height:32,cursor:'pointer',fontSize:17}}>×</button>
-        </div>
-
-        {/* Factura info */}
-        <div style={{background:'#F8FAFC',borderRadius:10,padding:'12px 14px',marginBottom:18,
-          border:'1px solid #E2E8F0'}}>
-          <div style={{fontWeight:700,color:C.navy,fontSize:14,marginBottom:4}}>
-            {inv.serie}{inv.folio} · {inv.proveedor}
-          </div>
-          <div style={{fontSize:12,color:C.muted,marginBottom:6}}>
-            {inv.clasificacion} · {inv.moneda}
-          </div>
-          <div style={{display:'flex',gap:16}}>
-            <span style={{fontSize:12,color:C.muted}}>Total: <strong>{sym}{fmt(inv.total)}</strong></span>
-            <span style={{fontSize:12,color:'#E65100'}}>Saldo: <strong>{sym}{fmt(saldo)}</strong></span>
-          </div>
-        </div>
-
-        {/* Fecha EFE */}
-        <div style={{marginBottom:20}}>
-          <label style={{display:'block',fontSize:11,fontWeight:700,color:C.muted,
-            textTransform:'uppercase',letterSpacing:.4,marginBottom:6}}>
-            Fecha en el EFE
-          </label>
-          <input type="date" value={fecha} onChange={e=>setFecha(e.target.value)}
-            style={{...inputStyle, fontSize:15, fontWeight:600}}/>
-          {inv.fechaProgramacion && (
-            <div style={{fontSize:11,color:C.muted,marginTop:5}}>
-              Fecha programación: {inv.fechaProgramacion}
-              {fecha !== inv.fechaProgramacion && (
-                <button onClick={()=>setFecha(inv.fechaProgramacion)}
-                  style={{marginLeft:8,background:'none',border:'none',color:C.sky,
-                    fontSize:11,cursor:'pointer',padding:0,textDecoration:'underline'}}>
-                  Usar esta
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-
-        <div style={{display:'flex',gap:10}}>
-          <button onClick={onClose} style={{flex:1,padding:'10px',borderRadius:10,
-            border:'1px solid #E2E8F0',background:'#F8FAFC',cursor:'pointer',fontFamily:'inherit',fontSize:14}}>
-            Cancelar
-          </button>
-          <button onClick={()=>onSave(inv, fecha)}
-            disabled={!fecha}
-            style={{flex:2,padding:'10px',borderRadius:10,border:'none',
-              background:fecha?'#1565C0':'#B0BEC5',color:'#fff',fontWeight:700,
-              cursor:fecha?'pointer':'not-allowed',fontFamily:'inherit',fontSize:14}}>
-            ✅ Proyectar el {fecha||'—'}
-          </button>
-        </div>
-      </div>
-    </div>
   );
 }

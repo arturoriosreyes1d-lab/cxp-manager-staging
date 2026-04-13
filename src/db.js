@@ -28,8 +28,6 @@ const toApp = (row) => ({
   voBo: row.vo_bo || false,
   autorizadoDireccion: row.autorizado_direccion || false,
   empresaId: row.empresa_id || null,
-  enEfe: row.en_efe || false,
-  fechaEfe: row.fecha_efe || '',
 });
 
 const toDB = (inv) => ({
@@ -59,8 +57,6 @@ const toDB = (inv) => ({
   vo_bo: inv.voBo || false,
   autorizado_direccion: inv.autorizadoDireccion || false,
   empresa_id: inv.empresaId || null,
-  en_efe: inv.enEfe || false,
-  fecha_efe: inv.fechaEfe || null,
 });
 
 const supToApp = (row) => ({
@@ -154,8 +150,6 @@ export async function updateInvoiceField(id, fields) {
   if ('concepto' in fields) dbFields.concepto = fields.concepto;
   if ('voBo' in fields) dbFields.vo_bo = fields.voBo;
   if ('autorizadoDireccion' in fields) dbFields.autorizado_direccion = fields.autorizadoDireccion;
-  if ('enEfe'    in fields) dbFields.en_efe    = fields.enEfe;
-  if ('fechaEfe' in fields) dbFields.fecha_efe = fields.fechaEfe || null;
   const { error } = await supabase.from('invoices').update(dbFields).eq('id', id);
   if (error) console.error('updateInvoiceField:', error);
 }
@@ -296,8 +290,6 @@ const ingresoToApp = (r) => ({
   fechaContable: r.fecha_contable || '',
   folio: r.folio || '',
   oculta: r.oculta || false,
-  enEfe: r.en_efe || false,
-  fechaEfe: r.fecha_efe || '',
 });
 
 const ingresoToDB = (i) => ({
@@ -392,9 +384,7 @@ export async function updateIngresoField(id, fields) {
   if ('segmento' in fields) dbFields.segmento = fields.segmento || null;
   if ('fechaContable' in fields) dbFields.fecha_contable = fields.fechaContable || null;
   if ('folio' in fields) dbFields.folio = fields.folio || null;
-  if ('oculta'    in fields) dbFields.oculta     = fields.oculta;
-  if ('enEfe'     in fields) dbFields.en_efe     = fields.enEfe;
-  if ('fechaEfe'  in fields) dbFields.fecha_efe  = fields.fechaEfe || null;
+  if ('oculta' in fields) dbFields.oculta = fields.oculta;
   const { error } = await supabase.from('ingresos').update(dbFields).eq('id', id);
   if (error) console.error('updateIngresoField:', error);
 }
@@ -775,4 +765,122 @@ export async function bulkInsertMovimientos(rows) {
     }
   }
   return { inserted, dupes };
+}
+
+/* ── Bromelia Operaciones ─────────────────────────────────────── */
+
+export async function fetchBromeliaData(empresaId) {
+  let q = supabase.from('bromelia_operaciones').select('*').order('fecha', { ascending: true });
+  if (empresaId) q = q.eq('empresa_id', empresaId);
+  const { data, error } = await q;
+  if (error) { console.error('fetchBromeliaData:', error); return []; }
+  return (data || []).map(r => ({
+    ...r.raw_data,
+    _dbId: r.id,
+    _servicio: r.servicio || '',
+    _destino: r.destino || '',
+    _cliente: r.cliente || '',
+    _mes: r.mes,
+    _fecha: r.fecha ? new Date(r.fecha + 'T12:00:00') : null,
+    _ingrC: +r.ingr_con_iva || 0,
+    _ingrS: +r.ingr_sin_iva || 0,
+    _egrsC: +r.egrs_con_iva || 0,
+    _egrsS: +r.egrs_sin_iva || 0,
+    _margen: +r.margen || 0,
+    _margenS: +r.margen_sin_iva || 0,
+    _estadoProv: r.estado_prov || '',
+    _estadoCli: r.estado_cli || '',
+    _facturaProv: r.factura_prov || '',
+    _facturaCliente: r.factura_cli || '',
+    _facturado: r.facturado || false,
+    _totalFactMX: +r.total_fact_mx || 0,
+    _totalFactUSD: +r.total_fact_usd || 0,
+    _so: r.so || '',
+    _os: r.os || '',
+    _proveedor: r.proveedor || '',
+  }));
+}
+
+export async function upsertBromeliaData(rows, empresaId, uploadedBy) {
+  if (!rows.length) return { inserted: 0, updated: 0, errors: 0 };
+  let inserted = 0, updated = 0, errors = 0;
+
+  for (const row of rows) {
+    const dedupKey = [
+      row._os || '',
+      row._fecha ? row._fecha.toISOString().slice(0, 10) : '',
+      row._cliente || '',
+      row._servicio || '',
+      row._destino || '',
+      String(row._ingrC || 0),
+    ].join('|');
+
+    // Build raw_data: strip computed fields to avoid circular/bloat
+    const rawData = {};
+    for (const [k, v] of Object.entries(row)) {
+      if (!k.startsWith('_')) {
+        rawData[k] = v instanceof Date ? v.toISOString() : v;
+      }
+    }
+
+    const record = {
+      empresa_id: empresaId,
+      dedup_key: dedupKey,
+      os: row._os || null,
+      destino: row._destino || null,
+      servicio: row._servicio || null,
+      cliente: row._cliente || null,
+      proveedor: row._proveedor || null,
+      fecha: row._fecha ? row._fecha.toISOString().slice(0, 10) : null,
+      mes: row._mes || null,
+      ingr_con_iva: row._ingrC || 0,
+      ingr_sin_iva: row._ingrS || 0,
+      egrs_con_iva: row._egrsC || 0,
+      egrs_sin_iva: row._egrsS || 0,
+      margen: row._margen || 0,
+      margen_sin_iva: row._margenS || 0,
+      estado_prov: row._estadoProv || null,
+      estado_cli: row._estadoCli || null,
+      factura_prov: row._facturaProv || null,
+      factura_cli: row._facturaCliente || null,
+      facturado: row._facturado || false,
+      total_fact_mx: row._totalFactMX || 0,
+      total_fact_usd: row._totalFactUSD || 0,
+      so: row._so || null,
+      raw_data: rawData,
+      uploaded_by: uploadedBy || null,
+    };
+
+    const { error } = await supabase
+      .from('bromelia_operaciones')
+      .upsert(record, { onConflict: 'empresa_id,dedup_key' });
+
+    if (!error) {
+      inserted++;
+    } else if (error.code === '23505') {
+      updated++;
+    } else {
+      console.error('upsertBromelia row error:', error, record);
+      errors++;
+    }
+  }
+  return { inserted, updated, errors };
+}
+
+export async function deleteBromeliaData(empresaId) {
+  const { error } = await supabase
+    .from('bromelia_operaciones')
+    .delete()
+    .eq('empresa_id', empresaId);
+  if (error) console.error('deleteBromeliaData:', error);
+  return !error;
+}
+
+export async function getBromeliaStats(empresaId) {
+  const { data, error } = await supabase
+    .from('bromelia_operaciones')
+    .select('id', { count: 'exact' })
+    .eq('empresa_id', empresaId);
+  if (error) return { count: 0 };
+  return { count: data?.length || 0 };
 }
