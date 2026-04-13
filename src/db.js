@@ -769,13 +769,34 @@ export async function bulkInsertMovimientos(rows) {
 
 /* ── Bromelia Operaciones ─────────────────────────────────────── */
 
-export async function fetchBromeliaData(empresaId) {
-  let q = supabase.from('bromelia_operaciones').select('*').order('fecha', { ascending: true });
-  if (empresaId) q = q.eq('empresa_id', empresaId);
-  const { data, error } = await q;
-  if (error) { console.error('fetchBromeliaData:', error); return []; }
-  return (data || []).map(r => ({
-    ...r.raw_data,
+const BROMELIA_PAGE = 3000;  // rows per fetch page (reduce round-trips)
+const BROMELIA_BATCH = 800;  // rows per upsert call
+
+// Columnas que ya están indexadas en la tabla — se excluyen de raw_data para ahorrar espacio
+const INDEXED_RAW_KEYS = new Set([
+  'DESTINO', 'CLIENTE', 'Cliente2', 'PROVEEDOR', 'OS', 'Os',
+  'UNIDAD DE SERVICIO', 'SO', 'ESTADO PROVEEDOR', 'ESTADO PROV',
+  'ESTADO CLIENTE', 'FACTURA PROVEEDOR', 'FACTURA CLIENTE',
+  'TOTAL FACTURADO MX', 'MONTO MX CLIENTE', 'TOTAL FACTURADO USD', 'MONTO USD CLIENTE',
+]);
+
+function bromeliaToApp(r) {
+  // Reconstruir columnas indexadas que se excluyeron de raw_data
+  const rebuilt = {
+    'DESTINO': r.destino || '',
+    'CLIENTE': r.cliente || '',
+    'PROVEEDOR': r.proveedor || '',
+    'OS': r.os || '',
+    'UNIDAD DE SERVICIO': r.servicio || '',
+    'SO': r.so || '',
+    'ESTADO PROVEEDOR': r.estado_prov || '',
+    'ESTADO CLIENTE': r.estado_cli || '',
+    'FACTURA PROVEEDOR': r.factura_prov || '',
+    'FACTURA CLIENTE': r.factura_cli || '',
+  };
+  return {
+    ...rebuilt,
+    ...(r.raw_data || {}),
     _dbId: r.id,
     _servicio: r.servicio || '',
     _destino: r.destino || '',
@@ -798,73 +819,80 @@ export async function fetchBromeliaData(empresaId) {
     _so: r.so || '',
     _os: r.os || '',
     _proveedor: r.proveedor || '',
-  }));
+  };
 }
 
-export async function upsertBromeliaData(rows, empresaId, uploadedBy) {
-  if (!rows.length) return { inserted: 0, updated: 0, errors: 0 };
-  let inserted = 0, updated = 0, errors = 0;
-
-  for (const row of rows) {
-    const dedupKey = [
-      row._os || '',
-      row._fecha ? row._fecha.toISOString().slice(0, 10) : '',
-      row._cliente || '',
-      row._servicio || '',
-      row._destino || '',
-      String(row._ingrC || 0),
-    ].join('|');
-
-    // Build raw_data: strip computed fields to avoid circular/bloat
-    const rawData = {};
-    for (const [k, v] of Object.entries(row)) {
-      if (!k.startsWith('_')) {
-        rawData[k] = v instanceof Date ? v.toISOString() : v;
-      }
-    }
-
-    const record = {
-      empresa_id: empresaId,
-      dedup_key: dedupKey,
-      os: row._os || null,
-      destino: row._destino || null,
-      servicio: row._servicio || null,
-      cliente: row._cliente || null,
-      proveedor: row._proveedor || null,
-      fecha: row._fecha ? row._fecha.toISOString().slice(0, 10) : null,
-      mes: row._mes || null,
-      ingr_con_iva: row._ingrC || 0,
-      ingr_sin_iva: row._ingrS || 0,
-      egrs_con_iva: row._egrsC || 0,
-      egrs_sin_iva: row._egrsS || 0,
-      margen: row._margen || 0,
-      margen_sin_iva: row._margenS || 0,
-      estado_prov: row._estadoProv || null,
-      estado_cli: row._estadoCli || null,
-      factura_prov: row._facturaProv || null,
-      factura_cli: row._facturaCliente || null,
-      facturado: row._facturado || false,
-      total_fact_mx: row._totalFactMX || 0,
-      total_fact_usd: row._totalFactUSD || 0,
-      so: row._so || null,
-      raw_data: rawData,
-      uploaded_by: uploadedBy || null,
-    };
-
-    const { error } = await supabase
-      .from('bromelia_operaciones')
-      .upsert(record, { onConflict: 'empresa_id,dedup_key' });
-
-    if (!error) {
-      inserted++;
-    } else if (error.code === '23505') {
-      updated++;
-    } else {
-      console.error('upsertBromelia row error:', error, record);
-      errors++;
+function bromelia_toDB(row, empresaId, uploadedBy) {
+  const dedupKey = [
+    row._os || '',
+    row._fecha ? row._fecha.toISOString().slice(0, 10) : '',
+    row._cliente || '',
+    row._servicio || '',
+    row._destino || '',
+    String(row._ingrC || 0),
+  ].join('|');
+  // raw_data SIN columnas ya indexadas — ahorra ~25-30% de espacio JSONB
+  const rawData = {};
+  for (const [k, v] of Object.entries(row)) {
+    if (!k.startsWith('_') && !INDEXED_RAW_KEYS.has(k)) {
+      rawData[k] = v instanceof Date ? v.toISOString() : v;
     }
   }
-  return { inserted, updated, errors };
+  return {
+    empresa_id: empresaId, dedup_key: dedupKey,
+    os: row._os || null, destino: row._destino || null,
+    servicio: row._servicio || null, cliente: row._cliente || null,
+    proveedor: row._proveedor || null,
+    fecha: row._fecha ? row._fecha.toISOString().slice(0, 10) : null,
+    mes: row._mes || null,
+    ingr_con_iva: row._ingrC || 0, ingr_sin_iva: row._ingrS || 0,
+    egrs_con_iva: row._egrsC || 0, egrs_sin_iva: row._egrsS || 0,
+    margen: row._margen || 0, margen_sin_iva: row._margenS || 0,
+    estado_prov: row._estadoProv || null, estado_cli: row._estadoCli || null,
+    factura_prov: row._facturaProv || null, factura_cli: row._facturaCliente || null,
+    facturado: row._facturado || false,
+    total_fact_mx: row._totalFactMX || 0, total_fact_usd: row._totalFactUSD || 0,
+    so: row._so || null, raw_data: rawData, uploaded_by: uploadedBy || null,
+  };
+}
+
+// FETCH paginado con progreso — soporta 20K+ registros
+export async function fetchBromeliaData(empresaId, onProgress) {
+  const all = [];
+  let from = 0;
+  while (true) {
+    let q = supabase.from('bromelia_operaciones').select('*')
+      .order('fecha', { ascending: true })
+      .range(from, from + BROMELIA_PAGE - 1);
+    if (empresaId) q = q.eq('empresa_id', empresaId);
+    const { data, error } = await q;
+    if (error) { console.error('fetchBromeliaData:', error); break; }
+    const rows = data || [];
+    all.push(...rows);
+    if (onProgress) onProgress(all.length);
+    if (rows.length < BROMELIA_PAGE) break;
+    from += BROMELIA_PAGE;
+  }
+  return all.map(bromeliaToApp);
+}
+
+// UPSERT por lotes — rápido para 20K+ registros
+export async function upsertBromeliaData(rows, empresaId, uploadedBy, onProgress) {
+  if (!rows.length) return { inserted: 0, errors: 0 };
+  const records = rows.map(r => bromelia_toDB(r, empresaId, uploadedBy));
+  let inserted = 0, errors = 0;
+  const totalBatches = Math.ceil(records.length / BROMELIA_BATCH);
+  for (let i = 0; i < records.length; i += BROMELIA_BATCH) {
+    const batch = records.slice(i, i + BROMELIA_BATCH);
+    const batchNum = Math.floor(i / BROMELIA_BATCH) + 1;
+    const { error } = await supabase
+      .from('bromelia_operaciones')
+      .upsert(batch, { onConflict: 'empresa_id,dedup_key', ignoreDuplicates: false });
+    if (!error) { inserted += batch.length; }
+    else { console.error('upsertBromelia batch error:', error); errors += batch.length; }
+    if (onProgress) onProgress({ batchNum, totalBatches, inserted, errors });
+  }
+  return { inserted, errors };
 }
 
 export async function deleteBromeliaData(empresaId) {
@@ -877,10 +905,10 @@ export async function deleteBromeliaData(empresaId) {
 }
 
 export async function getBromeliaStats(empresaId) {
-  const { data, error } = await supabase
+  const { count, error } = await supabase
     .from('bromelia_operaciones')
-    .select('id', { count: 'exact' })
+    .select('*', { count: 'exact', head: true })
     .eq('empresa_id', empresaId);
   if (error) return { count: 0 };
-  return { count: data?.length || 0 };
+  return { count: count || 0 };
 }

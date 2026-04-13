@@ -2777,7 +2777,7 @@ function Dashboard({ data, fileName, onReset, onUpload }) {
 }
 
 // ─── PREVIEW MODAL (resumen antes de confirmar) ──────────────────────────────
-function UploadPreviewModal({ preview, existingCount, onConfirm, onCancel, saving }) {
+function UploadPreviewModal({ preview, existingCount, onConfirm, onCancel, saving, savingMsg }) {
   if (!preview) return null;
   const { rows, fileName } = preview;
   const totalIngr = rows.reduce((s, r) => s + r._ingrC, 0);
@@ -2872,7 +2872,7 @@ function UploadPreviewModal({ preview, existingCount, onConfirm, onCancel, savin
             Cancelar
           </button>
           <button onClick={onConfirm} disabled={saving} style={{ padding: "10px 28px", borderRadius: 10, border: "none", background: saving ? "#94a3b8" : "#059669", color: "#fff", fontWeight: 700, fontSize: 14, cursor: saving ? "wait" : "pointer", fontFamily: "inherit", transition: "background 0.15s" }}>
-            {saving ? "Guardando…" : `✓ Confirmar y Guardar ${rows.length} registros`}
+            {saving ? (savingMsg || "Guardando…") : `✓ Confirmar y Guardar ${rows.length.toLocaleString()} registros`}
           </button>
         </div>
       </div>
@@ -2885,20 +2885,25 @@ export default function BromeliaView({ empresaId, user }) {
   const [data, setData] = useState(null);
   const [fileName, setFileName] = useState("Supabase");
   const [loading, setLoading] = useState(true);
+  const [loadingCount, setLoadingCount] = useState(0);
   const [error, setError] = useState(null);
   const [preview, setPreview] = useState(null);   // { rows, fileName }
   const [saving, setSaving] = useState(false);
+  const [savingMsg, setSavingMsg] = useState("");
   const [uploadMsg, setUploadMsg] = useState(null); // { type, text }
 
   // ── Load from Supabase on mount ──
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetchBromeliaData(empresaId).then(rows => {
+    setLoadingCount(0);
+    fetchBromeliaData(empresaId, (count) => {
+      if (!cancelled) setLoadingCount(count);
+    }).then(rows => {
       if (cancelled) return;
       if (rows.length > 0) {
         setData(rows);
-        setFileName(`Supabase · ${rows.length} registros`);
+        setFileName(`Supabase · ${rows.length.toLocaleString()} registros`);
       }
       setLoading(false);
     }).catch(err => {
@@ -2924,19 +2929,26 @@ export default function BromeliaView({ empresaId, user }) {
   const handleConfirm = useCallback(async () => {
     if (!preview) return;
     setSaving(true);
+    setSavingMsg("Preparando registros…");
     try {
-      const result = await upsertBromeliaData(preview.rows, empresaId, user?.username || user?.nombre || null);
-      // Reload from Supabase to get merged data
+      const result = await upsertBromeliaData(
+        preview.rows, empresaId, user?.username || user?.nombre || null,
+        ({ batchNum, totalBatches, inserted }) => {
+          setSavingMsg(`Lote ${batchNum}/${totalBatches} · ${inserted.toLocaleString()} guardados`);
+        }
+      );
+      setSavingMsg("Recargando datos…");
       const fresh = await fetchBromeliaData(empresaId);
       setData(fresh);
-      setFileName(`Supabase · ${fresh.length} registros`);
+      setFileName(`Supabase · ${fresh.length.toLocaleString()} registros`);
       setPreview(null);
-      setUploadMsg({ type: "ok", text: `✅ Importación exitosa: ${result.inserted} registros guardados` });
+      setUploadMsg({ type: "ok", text: `✅ Importación exitosa: ${result.inserted.toLocaleString()} registros guardados` });
       setTimeout(() => setUploadMsg(null), 6000);
     } catch (e) {
       setError("Error guardando datos: " + e);
     } finally {
       setSaving(false);
+      setSavingMsg("");
     }
   }, [preview, empresaId, user]);
 
@@ -2948,10 +2960,11 @@ export default function BromeliaView({ empresaId, user }) {
   // ── Reload from Supabase (reset) ──
   const handleReset = useCallback(async () => {
     setLoading(true);
-    const rows = await fetchBromeliaData(empresaId);
+    setLoadingCount(0);
+    const rows = await fetchBromeliaData(empresaId, (count) => setLoadingCount(count));
     if (rows.length > 0) {
       setData(rows);
-      setFileName(`Supabase · ${rows.length} registros`);
+      setFileName(`Supabase · ${rows.length.toLocaleString()} registros`);
     } else {
       setData(null);
       setFileName("");
@@ -2964,6 +2977,7 @@ export default function BromeliaView({ empresaId, user }) {
       <div style={{ textAlign: "center" }}>
         <div style={{ fontSize: 36, marginBottom: 12 }}>🌸</div>
         <div style={{ fontSize: 15, color: "#64748b" }}>Cargando datos Bromelia…</div>
+        {loadingCount > 0 && <div style={{ fontSize: 13, color: "#94a3b8", marginTop: 6 }}>{loadingCount.toLocaleString()} registros cargados</div>}
       </div>
     </div>
   );
@@ -2997,6 +3011,7 @@ export default function BromeliaView({ empresaId, user }) {
           onConfirm={handleConfirm}
           onCancel={handleCancel}
           saving={saving}
+          savingMsg={savingMsg}
         />
       )}
     </div>
