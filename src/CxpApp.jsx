@@ -10,7 +10,7 @@ import {
   upsertSupplier, upsertManySuppliers, saveClasificaciones,
   fetchPayments, insertPayment, deletePayment, updatePayment,
   fetchIngresos, fetchCobros, fetchInvoiceIngresos, fetchCategoriasIngreso,
-  upsertInvoiceIngreso, deleteInvoiceIngreso,
+  upsertInvoiceIngreso, deleteInvoiceIngreso, updateIngresoField,
   fetchClientes, upsertCliente, deleteCliente,
   fetchPorFacturar, insertPorFacturar, updatePorFacturar, deletePorFacturar, bulkInsertPorFacturar,
   fetchFinanciamientos, insertFinanciamiento, updateFinanciamiento, deleteFinanciamiento,
@@ -18,6 +18,7 @@ import {
   fetchTarjetas, updateTarjetaSaldo, fetchTarjetaMovimientos, bulkInsertMovimientos,
 } from "./db.js";
 import CxcView from "./CxcView.jsx";
+import EfeView from "./EfeView.jsx";
 import BromeliaView from "./BromeliaView.jsx";
 import { EMPRESAS } from "./empresas.js";
 
@@ -153,6 +154,7 @@ export default function CxpApp({ user, onLogout }) {
   const [modalInv, setModalInv] = useState(null);
   const [modalSup, setModalSup] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null); // {id, cur}
+  const [efeModal, setEfeModal] = useState(null); // factura a proyectar en EFE
   const [importMsg, setImportMsg] = useState("");
   const [importDupes, setImportDupes] = useState([]);
   const [projFrom, setProjFrom] = useState("");
@@ -555,6 +557,29 @@ export default function CxpApp({ user, onLogout }) {
   const deleteInvoice = (id, cur) => {
     setInvoices(prev => ({ ...prev, [cur]: prev[cur].filter(i=>i.id!==id) }));
     deleteInvoiceDB(id);
+  };
+
+  /* ── EFE: proyectar / quitar facturas ───────────────────────── */
+  const proyectarInvEfe = async (inv, fechaEfe) => {
+    const fe = fechaEfe || inv.fechaProgramacion || '';
+    await updateInvoiceField(inv.id, { enEfe: true, fechaEfe: fe });
+    const upd = i => i.id === inv.id ? { ...i, enEfe: true, fechaEfe: fe } : i;
+    setInvoices(prev => ({ MXN: prev.MXN.map(upd), USD: prev.USD.map(upd), EUR: prev.EUR.map(upd) }));
+    setEfeModal(null);
+  };
+  const quitarInvEfe = async (id) => {
+    await updateInvoiceField(id, { enEfe: false, fechaEfe: '' });
+    const upd = i => i.id === id ? { ...i, enEfe: false, fechaEfe: '' } : i;
+    setInvoices(prev => ({ MXN: prev.MXN.map(upd), USD: prev.USD.map(upd), EUR: prev.EUR.map(upd) }));
+  };
+  const proyectarIngEfe = async (ing, fechaEfe) => {
+    const fe = fechaEfe || ing.fechaFicticia || ing.fechaVencimiento || ing.fecha || '';
+    await updateIngresoField(ing.id, { enEfe: true, fechaEfe: fe });
+    setIngresos(prev => prev.map(i => i.id === ing.id ? { ...i, enEfe: true, fechaEfe: fe } : i));
+  };
+  const quitarIngEfe = async (id) => {
+    await updateIngresoField(id, { enEfe: false, fechaEfe: '' });
+    setIngresos(prev => prev.map(i => i.id === id ? { ...i, enEfe: false, fechaEfe: '' } : i));
   };
 
   const updateEstatus = (id, estatus) => {
@@ -2821,6 +2846,7 @@ export default function CxpApp({ user, onLogout }) {
         <NavItem id="proveedores" icon="🏢" label="Proveedores"/>
         <NavItem id="proyeccion" icon="📅" label="Proyección"/>
         <NavItem id="importar" icon="📥" label="Importar"/>
+        <NavItem id="efe" icon="🌊" label="Flujo EFE"/>
         {empresaId === "empresa_2" && <NavItem id="bromelia" icon="🌸" label="Bromelia"/>}
         <NavItem id="cxc" icon="💵" label="CxC — Ingresos"/>
         <NavItem id="clientes" icon="👥" label="Clientes CxC"/>
@@ -2867,6 +2893,19 @@ export default function CxpApp({ user, onLogout }) {
         {view==="proveedores" && renderProveedores()}
         {view==="proyeccion" && renderProyeccion()}
         {view==="importar" && renderImportar()}
+        {view==="efe" && (
+          <EfeView
+            invoices={invoices}
+            ingresos={ingresos}
+            cobros={cobros}
+            empresaId={empresaId}
+            esConsulta={esConsulta}
+            onProjectInvoice={proyectarInvEfe}
+            onUnprojectInvoice={quitarInvEfe}
+            onProjectIngreso={proyectarIngEfe}
+            onUnprojectIngreso={quitarIngEfe}
+          />
+        )}
         {view==="bromelia" && empresaId === "empresa_2" && (
           <BromeliaView empresaId={empresaId} user={user} />
         )}
